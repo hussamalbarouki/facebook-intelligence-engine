@@ -12,11 +12,11 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from .engine import scrape_post, validate_facebook_url, ExtractionError
-from .facebook_session import probe_cookie_file
+from .facebook_session import probe_cookie_file, probe_post_access
 from .secrets import CookieVault
 from .storage import JobStore
 
-VERSION='1.2.2'
+VERSION='1.2.3'
 log=logging.getLogger('fb-engine')
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 
@@ -166,6 +166,15 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
         row=store.get(job_id)
         if not row:raise HTTPException(status_code=404,detail='Job not found')
         return row
+
+    @app.get('/v1/jobs/{job_id}/diagnostics',dependencies=[Depends(authorize)])
+    def diagnose_job(job_id:str):
+        """Read-only session diagnosis of the stored post URL; never expose cookies."""
+        row=store.get(job_id)
+        if not row:raise HTTPException(status_code=404,detail='Job not found')
+        # URL was validated at creation, and is never accepted as arbitrary host.
+        with vault.temporary_cookie_file() as cookie_path:
+            return {'job_id':job_id,**probe_post_access(cookie_path,row['url'])}
 
     @app.post('/v1/jobs/{job_id}/retry',dependencies=[Depends(authorize)])
     def retry(job_id:str):
