@@ -13,7 +13,7 @@ import tempfile
 from datetime import date, datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
-from .facebook_session import inspect_session, configure_facebook_session
+from .facebook_session import inspect_session, configure_facebook_session, apply_facebook_cookies
 
 log = logging.getLogger('fb-engine.adapter')
 
@@ -185,6 +185,14 @@ def _graphql_scrape(url, comment_limit, reactor_limit, cookies_file, reference):
         # unrelated celebrity post bundled into the third-party library.
         discovery_url=url
         class SessionAwareFacebookContext(gql.FacebookContext):
+            def _load_cookies(self):
+                # The upstream library converts the cookie array into a dict by
+                # name, discarding browser domain/path scope and duplicates.
+                import json as _json
+                with open(self._cookies_file,encoding='utf-8') as file:
+                    raw=_json.load(file)
+                apply_facebook_cookies(self.session,raw)
+
             def __init__(self, **kwargs):
                 super().__init__(**kwargs)
                 configure_facebook_session(self.session)

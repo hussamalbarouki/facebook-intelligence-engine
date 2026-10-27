@@ -111,6 +111,23 @@ def configure_facebook_session(session):
     return session
 
 
+def apply_facebook_cookies(session, cookies):
+    """Load validated browser cookie scopes into RequestsCookieJar, not a dict."""
+    for item in cookies:
+        if not isinstance(item,dict):
+            continue
+        name, value = item.get('name'), item.get('value')
+        domain = item.get('domain') or '.facebook.com'
+        path = item.get('path') or '/'
+        host = domain.lstrip('.').lower() if isinstance(domain,str) else ''
+        if (not isinstance(name,str) or not isinstance(value,str)
+                or not (host == 'facebook.com' or host.endswith('.facebook.com'))
+                or not isinstance(path,str) or not path.startswith('/')):
+            continue
+        session.cookies.set(name,value,domain=domain,path=path,
+                            secure=item.get('secure',True) is True)
+
+
 def _post_response_report(response):
     """Sanitized classification of a single Facebook response, never its body."""
     from urllib.parse import urlsplit
@@ -188,9 +205,7 @@ def probe_post_access(cookie_path: str | None, post_url: str):
         try:
             with requests.Session() as session:
                 configure_facebook_session(session)
-                for item in cookies:
-                    if isinstance(item,dict) and isinstance(item.get('name'),str) and isinstance(item.get('value'),str):
-                        session.cookies.set(item['name'],item['value'],domain='.facebook.com',path='/')
+                apply_facebook_cookies(session,cookies)
                 headers = {'Accept':accept} if accept else None
                 response = session.get(post_url,timeout=(5,15),allow_redirects=False,headers=headers)
                 results[name] = _post_response_report(response)
@@ -214,11 +229,7 @@ def probe_cookie_file(cookie_path: str | None):
         cookie_count=len(raw)
         with requests.Session() as session:
             configure_facebook_session(session)
-            for cookie in raw:
-                name, value = cookie.get('name'), cookie.get('value')
-                if not isinstance(name,str) or not isinstance(value,str):
-                    continue
-                session.cookies.set(name,value,domain='.facebook.com',path='/')
+            apply_facebook_cookies(session,raw)
             result,_=inspect_session(lambda url:session.get(url,timeout=(4,12),allow_redirects=True))
             result['cookie_count']=cookie_count
             if cookie_count<=2 and not result['token_available']:

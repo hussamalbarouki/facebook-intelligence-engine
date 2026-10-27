@@ -23,9 +23,24 @@ def _normalize_cookies(raw):
         domain = item.get('domain') or '.facebook.com'
         if not isinstance(name,str) or not name or len(name)>128 or not isinstance(value,str) or len(value)>4096:
             raise ValueError('Invalid cookie name or value')
-        if domain.lstrip('.').lower() not in ('facebook.com','www.facebook.com','m.facebook.com'):
-            raise ValueError('Only Facebook cookies are accepted')
-        cleaned.append({'name':name,'value':value,'domain':'.facebook.com','path':'/','secure':True})
+        if not isinstance(domain,str):
+            raise ValueError('Invalid cookie domain')
+        domain = domain.strip().lower()
+        host = domain.lstrip('.')
+        if (not host or len(domain)>255 or not (host == 'facebook.com' or host.endswith('.facebook.com'))
+                or not all(label and label.replace('-','').isalnum() for label in host.split('.'))
+                or domain.startswith('..')):
+            raise ValueError('Only valid Facebook subdomain cookies are accepted')
+        path = item.get('path') or '/'
+        if (not isinstance(path,str) or not path.startswith('/') or len(path)>512
+                or any(ord(ch)<32 for ch in path)):
+            raise ValueError('Invalid cookie path')
+        secure = item.get('secure',True)
+        if not isinstance(secure,bool):
+            raise ValueError('Invalid cookie secure flag')
+        # Preserve domain/path scoping from the original browser export.
+        # Flattening all entries to .facebook.com and / changes what gets sent.
+        cleaned.append({'name':name,'value':value,'domain':domain,'path':path,'secure':secure})
     names = {c['name'] for c in cleaned}
     if not {'c_user','xs'}.issubset(names):
         raise ValueError('Facebook login cookies c_user and xs are required')
