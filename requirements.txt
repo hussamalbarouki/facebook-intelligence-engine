@@ -8,3 +8,6 @@ lxml_html_clean==0.4.5
 
 # GraphQL-based fallback/primary adapter for current Facebook UI, pinned to reviewed commit.
 facebook-gql-scraper @ git+https://github.com/XD-MHLOO/facebook-gql-scraper.git@85849e2295c9e36f5ba333217c72f769fb96a671
+
+# Real-browser fallback, pinned to the matching Chromium binary revision.
+playwright==1.64.1

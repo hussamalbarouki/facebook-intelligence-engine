@@ -458,5 +458,29 @@ def scrape_post(url, comment_limit, reactor_limit, cookies_file=None):
         attempted.append('legacy-failed')
         if not attempted[:-1]:
             last_code='POST_NOT_PARSED'
+    # Browser-backed fallback observes actual Facebook GraphQL responses, so
+    # it does not depend on discovering an undocumented doc_id from JS bundles.
+    # Run only when lightweight adapters fail and honor the single-browser
+    # resource guard for small VPS deployments.
+    if cookies_file and (comment_limit or reactor_limit):
+        try:
+            from .browser_engine import scrape_with_browser
+            result=scrape_with_browser(resolved_url,comment_limit,reactor_limit,cookies_file)
+            if _has_requested_interactions(result,comment_limit,reactor_limit):
+                return result
+            attempted.append('browser-no-interactions')
+        except Exception as exc:
+            # Don't serialize exception text (it may contain page/session data).
+            reason=str(exc) if type(exc) is RuntimeError else type(exc).__name__
+            if reason not in {
+                'BROWSER_DISABLED','BROWSER_RESOURCE_BUSY','BROWSER_COOKIES_REQUIRED',
+                'BROWSER_NO_ITEMS_REQUESTED','BROWSER_LEFT_FACEBOOK_DOMAIN',
+                'BROWSER_LOGIN_OR_CHECKPOINT_REQUIRED','BROWSER_NO_VERIFIABLE_INTERACTIONS',
+            }:
+                reason=type(exc).__name__
+            log.warning('Browser fallback did not extract data: %s',reason)
+            attempted.append('browser-'+reason.lower())
+            if last_code in ('POST_NOT_PARSED','POST_URL_UNSUPPORTED'):
+                last_code='BROWSER_EXTRACTION_UNAVAILABLE' if reason!='BROWSER_DISABLED' else last_code
     log.warning('Post extraction failed after adapters: %s', ','.join(attempted))
     raise ExtractionError(last_code)

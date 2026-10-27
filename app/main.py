@@ -16,7 +16,7 @@ from .facebook_session import probe_cookie_file, probe_post_access
 from .secrets import CookieVault
 from .storage import JobStore
 
-VERSION='1.2.7'
+VERSION='1.3.0'
 log=logging.getLogger('fb-engine')
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 
@@ -106,12 +106,12 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
 
     @app.get('/v1/capabilities',dependencies=[Depends(authorize)])
     def capabilities():
-        return {'version':VERSION,'adapter':'graphql-primary + legacy-html-fallback','supports':['session_diagnostics','posts','comments','comment_replies','reactors','reaction_types','cookie_management','jobs','pagination'],
-                'limits':{'comments':1000,'reactors':1000},'known_limitations':['Facebook may require cookies or block scraping','Reaction lists may be partial','No live Facebook test is performed in CI','Accessible sessions do not guarantee all posts are readable']}
+        return {'version':VERSION,'adapter':'graphql-primary + legacy-html + playwright-browser-fallback','supports':['session_diagnostics','posts','comments','comment_replies','reactors','reaction_types','cookie_management','jobs','pagination'],
+                'limits':{'comments':1000,'reactors':1000},'known_limitations':['Facebook may require cookies or block scraping','Reaction lists may be partial','No live Facebook extraction test is performed in CI','Accessible sessions do not guarantee all posts are readable','Playwright browser results are partial and capped at 100 interactions per kind per attempt','Browser fallback can be disabled with FB_BROWSER_ENABLED=0']}
 
     @app.get('/v1/status',dependencies=[Depends(authorize)])
     def status():
-        return {'ok':True,'version':VERSION,'adapter':'graphql-primary + legacy-html-fallback',
+        return {'ok':True,'version':VERSION,'adapter':'graphql-primary + legacy-html + playwright-browser-fallback',
                 'cookies':vault.status(),'settings':store.settings(),'queue':store.metrics()}
 
     @app.get('/v1/settings',dependencies=[Depends(authorize)])

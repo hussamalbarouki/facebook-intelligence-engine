@@ -35,6 +35,14 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description=Facebook extraction API, self-hosted
+      - name: Smoke test Chromium + Xvfb inside the published container
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
+        run: |
+          docker pull "$IMAGE"
+          docker run --rm --memory=2g --cpus=2 --shm-size=256m \
+            --entrypoint xvfb-run "$IMAGE" -a -s "-screen 0 1280x900x24" \
+            python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=False,args=["--disable-dev-shm-usage"]); page=b.new_page(); page.goto("data:text/html,<h1>browser-ready</h1>"); assert page.locator("h1").inner_text()=="browser-ready"; b.close(); p.stop(); print("headed Chromium smoke test OK")'
       - name: Trigger Coolify after a successful image publish (optional)
         if: ${{ success() }}
         env:
