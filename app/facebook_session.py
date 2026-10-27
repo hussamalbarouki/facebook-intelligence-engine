@@ -52,6 +52,8 @@ def _page_status(response) -> str:
     text = str(getattr(response, 'text', ''))
     low = text[:100000].lower()
     code = int(getattr(response, 'status_code', 0) or 0)
+    if code == 400:
+        return 'facebook_http_bad_request'
     if code in (401, 403, 429):
         return 'facebook_access_restricted'
     if '/checkpoint/' in url or '/two_step_verification/' in url or 'checkpoint' in url:
@@ -96,6 +98,21 @@ def inspect_session(request_get):
     return ({'status':'fb_dtsg_unavailable','token_available':False,'checked':observations},None)
 
 
+def configure_facebook_session(session):
+    """Use the Requests default User-Agent confirmed to receive HTTP 200.
+
+    The legacy GraphQL adapter sends a fabricated Chrome identity with browser
+    client hints; this VPS's Facebook responses reject the tested Chrome UA.
+    Do not pretend to be another browser or mix inconsistent sec-ch headers.
+    """
+    for name in list(session.headers):
+        if name.lower().startswith(('sec-ch-ua', 'sec-fetch-')) or name.lower() == 'priority':
+            session.headers.pop(name, None)
+    session.headers['User-Agent'] = requests.utils.default_headers()['User-Agent']
+    session.headers['Accept-Language'] = 'en-US,en;q=0.8'
+    return session
+
+
 def probe_cookie_file(cookie_path: str | None):
     if not cookie_path:
         return {'status':'cookies_not_configured','token_available':False}
@@ -109,8 +126,7 @@ def probe_cookie_file(cookie_path: str | None):
             return {'status':'cookies_missing_required_names','token_available':False}
         cookie_count=len(raw)
         with requests.Session() as session:
-            session.headers.update({'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
-                                    'Accept-Language':'en-US,en;q=0.8'})
+            configure_facebook_session(session)
             for cookie in raw:
                 name, value = cookie.get('name'), cookie.get('value')
                 if not isinstance(name,str) or not isinstance(value,str):
