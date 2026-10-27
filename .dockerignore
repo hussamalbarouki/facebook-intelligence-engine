@@ -2,7 +2,8 @@
 .github
 php
 docs
-tests
+tests/*
+!tests/browser_smoke.py
 *.zip
 .env
 __pycache__
