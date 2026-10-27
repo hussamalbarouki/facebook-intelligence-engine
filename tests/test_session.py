@@ -1,5 +1,5 @@
 import unittest
-from app.facebook_session import extract_dtsg, inspect_session, _page_status, configure_facebook_session
+from app.facebook_session import extract_dtsg, inspect_session, _page_status, configure_facebook_session, _post_response_report
 import requests
 
 class Response:
@@ -29,6 +29,33 @@ class SessionTest(unittest.TestCase):
         report,token=inspect_session(lambda u:Response('<form><input name="email"><input name="pass"></form>'))
         self.assertEqual(report['status'],'facebook_login_required')
         self.assertIsNone(token)
+    def test_post_response_reports_cookie_deletion_without_secrets(self):
+        class FakeReply:
+            status_code=200
+            text='<html>private account abc-sensitivetext</html>'
+            headers={'set-cookie':'datr=abc; Path=/, c_user=deleted; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+                     'set-login':'logged-out', 'Location':'https://www.facebook.com/login/?sensitive=abc'}
+        report=_post_response_report(FakeReply())
+        self.assertEqual(report['classification'],'facebook_rejected_login_cookie')
+        self.assertTrue(report['cookie_deletion_requested'])
+        self.assertEqual(report['redirect_kind'],'login')
+        self.assertNotIn('sensitivetext',str(report))
+        self.assertNotIn('sensitive=abc',str(report))
+    def test_post_response_normal_200_does_not_claim_extraction(self):
+        class FakeReply:
+            status_code=200
+            text='<html>No visible comments</html>'
+            headers={'content-type':'text/html'}
+        report=_post_response_report(FakeReply())
+        self.assertEqual(report['classification'],'html_received_not_proof_of_post_access')
+        self.assertFalse(report['cookie_deletion_requested'])
+    def test_post_response_login_wall(self):
+        class FakeReply:
+            status_code=200
+            text='<input name="email"><input name="pass">'
+            headers={}
+        self.assertEqual(_post_response_report(FakeReply())['classification'],'login_required_or_wall')
+
     def test_http_400_distinct_from_missing_token(self):
         self.assertEqual(_page_status(Response('Bad Request', 400)), 'facebook_http_bad_request')
 
