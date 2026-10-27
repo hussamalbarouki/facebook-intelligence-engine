@@ -43,7 +43,10 @@ class AdapterRegressions(unittest.TestCase):
             def from_post_id(cls,ctx,post_id):return cls()
             def get_comments(self):return iter([Comment()])
             def get_reactors(self):return iter([Reactor()])
-        fake=types.SimpleNamespace(Post=Post,FacebookContext=lambda **kw:object())
+        class MockContext:
+            def __init__(self, **kwargs):
+                self.fb_dtsg = None
+        fake=types.SimpleNamespace(Post=Post,FacebookContext=MockContext)
         with patch.dict(sys.modules,{'facebook_gql_scraper':fake}):
             result=scrape_post(URL,2,2,'/tmp/fakecookie.json')
         self.assertEqual(result['comments'][0]['name'],'Amina')
