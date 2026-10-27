@@ -4,7 +4,7 @@ on:
     branches: [main]
   workflow_dispatch:
 concurrency:
-  group: publish-${{ github.ref }}
+  group: publish-browser-v13-${{ github.ref }}
   cancel-in-progress: true
 permissions:
   contents: read
@@ -12,6 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
