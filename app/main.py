@@ -16,7 +16,7 @@ from .facebook_session import probe_cookie_file, probe_post_access
 from .secrets import CookieVault
 from .storage import JobStore
 
-VERSION='1.3.1'
+VERSION='1.3.2'
 log=logging.getLogger('fb-engine')
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 
@@ -106,12 +106,12 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
 
     @app.get('/v1/capabilities',dependencies=[Depends(authorize)])
     def capabilities():
-        return {'version':VERSION,'adapter':'graphql-primary + legacy-html + playwright-browser-fallback','supports':['session_diagnostics','posts','comments','comment_replies','reactors','reaction_types','cookie_management','jobs','pagination'],
+        return {'version':VERSION,'adapter':'playwright-browser-observation + graphql-legacy + html-legacy','supports':['session_diagnostics','posts','comments','comment_replies','reactors','reaction_types','cookie_management','jobs','pagination'],
                 'limits':{'comments':1000,'reactors':1000},'known_limitations':['Facebook may require cookies or block scraping','Reaction lists may be partial','No live Facebook extraction test is performed in CI','Accessible sessions do not guarantee all posts are readable','Playwright browser results are partial and capped at 100 interactions per kind per attempt','Browser fallback can be disabled with FB_BROWSER_ENABLED=0']}
 
     @app.get('/v1/status',dependencies=[Depends(authorize)])
     def status():
-        return {'ok':True,'version':VERSION,'adapter':'graphql-primary + legacy-html + playwright-browser-fallback',
+        return {'ok':True,'version':VERSION,'adapter':'playwright-browser-observation + graphql-legacy + html-legacy',
                 'cookies':vault.status(),'settings':store.settings(),'queue':store.metrics()}
 
     @app.get('/v1/settings',dependencies=[Depends(authorize)])
@@ -177,6 +177,38 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
         with vault.temporary_cookie_file() as cookie_path:
             result=probe_post_access(cookie_path,row['url'])
         return {'job_id':job_id,'reference_kind':kind[0] if kind else 'opaque_share' if is_share_link(row['url']) else 'unsupported','graphql_candidate':bool(kind) or is_share_link(row['url']),**result}
+
+    @app.post('/v1/jobs/{job_id}/browser-diagnostics',dependencies=[Depends(authorize)])
+    def diagnose_browser_job(job_id:str):
+        """Run a read-only browser inspection on the same job URL and stored session.
+
+        Returns aggregate structure/visibility counters only. No page HTML,
+        comments, names, Facebook response bodies, CSRF tokens or cookies.
+        """
+        row=store.get(job_id)
+        if not row:raise HTTPException(status_code=404,detail='Job not found')
+        try:
+            with vault.temporary_cookie_file() as cookie_path:
+                if not cookie_path:
+                    raise HTTPException(status_code=409,detail='Facebook cookies not configured')
+                from .engine import resolve_share_link
+                from .browser_engine import scrape_with_browser
+                url=row['url']
+                if is_share_link(url):
+                    url,_=resolve_share_link(url,cookie_path)
+                diagnostics=scrape_with_browser(
+                    url,min(row['comment_limit'],10),min(row['reactor_limit'],10),
+                    cookie_path,diagnostic_only=True)
+                return {'job_id':job_id,**diagnostics}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            code=str(exc) if type(exc) is RuntimeError else type(exc).__name__
+            if code not in ('BROWSER_RESOURCE_BUSY','BROWSER_DISABLED',
+                            'BROWSER_LOGIN_OR_CHECKPOINT_REQUIRED',
+                            'FACEBOOK_SHARE_LINK_UNRESOLVED'):
+                code='BROWSER_DIAGNOSTIC_UNAVAILABLE'
+            return {'job_id':job_id,'status':'diagnostic_failed','code':code}
 
     @app.post('/v1/jobs/{job_id}/retry',dependencies=[Depends(authorize)])
     def retry(job_id:str):

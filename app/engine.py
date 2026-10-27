@@ -413,6 +413,7 @@ def scrape_post(url, comment_limit, reactor_limit, cookies_file=None):
     attempted=[]
     last_code='POST_URL_UNSUPPORTED' if reference is None else 'POST_NOT_PARSED'
     resolved_url=url
+    browser_attempted=False
     if cookies_file and not reference and is_share_link(url):
         try:
             resolved_url,reference=resolve_share_link(url,cookies_file)
@@ -424,6 +425,27 @@ def scrape_post(url, comment_limit, reactor_limit, cookies_file=None):
             log.warning('Facebook share link resolution failed: %s',type(exc).__name__)
             attempted.append('share-link-failed')
             last_code='FACEBOOK_SHARE_LINK_UNRESOLVED'
+    # Modern Facebook UI is browser-driven. Try the browser first so current
+    # Comet interactions do not depend on the legacy doc-id discovery path.
+    # If it cannot verify interactions, continue with the existing adapters.
+    if (cookies_file and (comment_limit or reactor_limit)
+            and os.getenv('FB_BROWSER_FIRST','1').strip().lower() not in ('0','false','no')):
+        browser_attempted=True
+        try:
+            from .browser_engine import scrape_with_browser
+            log.info('Trying browser-first Facebook extraction')
+            result=scrape_with_browser(resolved_url,comment_limit,reactor_limit,cookies_file)
+            if _has_requested_interactions(result,comment_limit,reactor_limit):
+                return result
+            attempted.append('browser-first-empty')
+        except Exception as exc:
+            reason=str(exc) if type(exc) is RuntimeError else type(exc).__name__
+            if reason not in ('BROWSER_DISABLED','BROWSER_RESOURCE_BUSY',
+                              'BROWSER_LOGIN_OR_CHECKPOINT_REQUIRED',
+                              'BROWSER_NO_VERIFIABLE_INTERACTIONS'):
+                reason=type(exc).__name__
+            log.warning('Browser-first did not extract verified interactions: %s',reason)
+            attempted.append('browser-first-'+reason.lower())
     if cookies_file and reference:
         try:
             result=_graphql_scrape(resolved_url,comment_limit,reactor_limit,cookies_file,reference)
@@ -462,7 +484,7 @@ def scrape_post(url, comment_limit, reactor_limit, cookies_file=None):
     # it does not depend on discovering an undocumented doc_id from JS bundles.
     # Run only when lightweight adapters fail and honor the single-browser
     # resource guard for small VPS deployments.
-    if cookies_file and (comment_limit or reactor_limit):
+    if cookies_file and (comment_limit or reactor_limit) and not browser_attempted:
         try:
             from .browser_engine import scrape_with_browser
             result=scrape_with_browser(resolved_url,comment_limit,reactor_limit,cookies_file)

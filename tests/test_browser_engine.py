@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from app.browser_engine import (
     MAX_RESPONSE_BYTES, _parse_json_fragments, _browser_cookie_entries,
-    parse_graphql_interactions
+    parse_graphql_interactions, graphql_response_shape, _valid_profile_url
 )
 from app.engine import scrape_post, ExtractionError
 
@@ -68,6 +68,43 @@ class BrowserParsingTests(unittest.TestCase):
         self.assertEqual(loaded[1]['domain'],'www.facebook.com')
         self.assertEqual(loaded[1]['path'],'/private')
         self.assertNotIn('evil.test',str(loaded))
+
+    def test_realistic_nested_comet_comment_and_reactor_without_url(self):
+        payload={"data":{"feedback":{"display_comments":{"edges":[{"node":{
+           "__typename":"XFBComment","id":"Y29tbWVudDo0Mg",
+           "author":{"id":"234","name":"Samira"},
+           "body":{"text":{"text":"Nested Comet message"}}}}]},
+           "reactors":{"edges":[{"node":{
+           "actor":{"id":"5512771","name":"Fadi"},
+           "reaction_type":{"name":"LIKE"}}}]}}}}
+        comments,reactors=parse_graphql_interactions(json.dumps(payload),8,8)
+        self.assertEqual(len(comments),1)
+        self.assertEqual(comments[0]['text'],'Nested Comet message')
+        self.assertEqual(len(reactors),1)
+        self.assertEqual(reactors[0]['name'],'Fadi')
+        self.assertIsNone(reactors[0]['profile_url'])
+        shape=graphql_response_shape(json.dumps(payload))
+        self.assertGreater(shape['comment_nodes'],0)
+        self.assertGreater(shape['reactor_containers'],0)
+        self.assertNotIn('Samira',str(shape))
+
+    def test_shape_report_never_includes_user_values(self):
+        body={"data":{"feedback":{"display_comments":[{"__typename":"Comment",
+                 "author":{"name":"SECRET_PERSON","id":"999"},
+                 "body":{"text":"SECRET_BODY"}}]}}}
+        shape=graphql_response_shape(json.dumps(body))
+        self.assertTrue(shape['comment_containers']>=1)
+        self.assertNotIn('SECRET_PERSON',str(shape))
+        self.assertNotIn('SECRET_BODY',str(shape))
+        self.assertEqual(shape['graphql_errors'],0)
+
+    def test_numeric_profile_php_id_and_comment_permalink(self):
+        url='https://www.facebook.com/profile.php?id=12345678&fbclid=tracker'
+        self.assertIn('id=12345678',_valid_profile_url(url))
+        self.assertNotIn('fbclid',_valid_profile_url(url))
+        comment='https://www.facebook.com/example/posts/12345678?comment_id=789456123&fbclid=tracking'
+        self.assertIn('comment_id=789456123',_valid_profile_url(comment,comment_permalink=True))
+        self.assertNotIn('fbclid',_valid_profile_url(comment,comment_permalink=True))
 
     def test_reactor_requires_reaction_context(self):
         payload={"data":{"users":{"edges":[{"node":{

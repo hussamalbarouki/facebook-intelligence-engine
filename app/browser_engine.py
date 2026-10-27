@@ -25,9 +25,12 @@ MAX_JSON_NODES=8000
 MAX_BROWSER_LIMIT=100
 
 def _safe_text(value,limit=25000):
-    if isinstance(value,dict):
-        value=value.get('text')
-    return value[:limit] if isinstance(value,str) else None
+    """Conservative extraction of Facebook TextWithEntities-style values."""
+    for _ in range(3):
+        if not isinstance(value,dict):
+            break
+        value=value.get('text') or value.get('content') or value.get('message')
+    return value[:limit].strip() if isinstance(value,str) and value.strip() else None
 
 def _valid_profile_url(url, comment_permalink=False):
     if not isinstance(url,str) or len(url)>1024:
@@ -73,11 +76,13 @@ def _is_comment(node, parent):
     if not isinstance(node,dict):
         return False
     kind=str(node.get('__typename') or node.get('type') or '')
-    if kind in ('Comment','FeedbackComment','UFIComment','TopLevelComment'):
+    if kind in ('Comment','FeedbackComment','UFIComment','TopLevelComment',
+                'XFBComment','CometUFIComment','CommentInstance'):
         return True
     return 'comment' in parent.lower() and (
-        isinstance(node.get('body'),dict) and isinstance(node.get('author'),dict)
-        and ('id' in node or 'comment_id' in node))
+        isinstance(node.get('author') or node.get('commenter') or node.get('actor'),dict)
+        and any(k in node for k in ('id','comment_id'))
+        and any(k in node for k in ('body','message','text')))
 
 def _extract_comment(node):
     owner=node.get('author') or node.get('commenter') or node.get('actor')
@@ -107,12 +112,15 @@ def _extract_reactor(node, parent):
         return None
     name=_safe_text(actor.get('name'),160)
     profile=_valid_profile_url(actor.get('url') or actor.get('uri') or actor.get('profile_url'))
-    if not (name and profile):
+    actor_id=actor.get('id')
+    if not name or not (profile or (isinstance(actor_id,(str,int)) and 2<len(str(actor_id))<=70)):
         return None
     typ=node.get('reaction_type') or node.get('reaction_type_id') or node.get('reaction')
     if isinstance(typ,dict):
         typ=typ.get('name') or typ.get('id')
-    return {'name':name,'profile_url':profile,'type':str(typ).lower()[:50] if typ else 'unknown'}
+    return {'name':name,'profile_url':profile,
+            'id':str(actor_id) if isinstance(actor_id,(str,int)) else None,
+            'type':str(typ).lower()[:50] if typ else 'unknown'}
 
 def parse_graphql_interactions(raw, comment_limit, reactor_limit):
     """Bounded, shape-tolerant walker. Only emit entries with identifiable evidence."""
@@ -131,7 +139,7 @@ def parse_graphql_interactions(raw, comment_limit, reactor_limit):
             if len(reactors)<reactor_limit:
                 found=_extract_reactor(node,parent)
                 if found:
-                    reactors.setdefault(found['profile_url'],found)
+                    reactors.setdefault(found['profile_url'] or found['id'],found)
             for key,val in node.items():
                 if isinstance(val,(dict,list)):
                     # Keep the immediate context of the nearest named container
@@ -199,7 +207,72 @@ _EXPAND_LABELS=re.compile(
     r'|(?:mostra|visualizza|altri)\s+(?:commenti|risposte)'
     r'|(?:daha\s+fazla|yorumları\s+gör)',re.I)
 
-def scrape_with_browser(url, comment_limit, reactor_limit, cookies_file):
+
+def graphql_response_shape(raw):
+    """Only structural counters are returned. No post text, IDs or tokens."""
+    stats={'json_documents':0,'graphql_errors':0,'comment_nodes':0,
+           'reactor_containers':0,'comment_containers':0,'top_level_keys':[]}
+    docs=_parse_json_fragments(raw)
+    stats['json_documents']=len(docs)
+    stats['graphql_errors']=sum(
+        1 for obj in docs if isinstance(obj,dict) and obj.get('errors'))
+    stats['top_level_keys']=sorted({
+        k for obj in docs if isinstance(obj,dict)
+        for k in obj.keys() if k in ('data','errors','extensions','label','path')})
+    stack=list(docs)
+    count=0
+    while stack and count<MAX_JSON_NODES:
+        node=stack.pop()
+        count+=1
+        if isinstance(node,dict):
+            typ=node.get('__typename')
+            if isinstance(typ,str) and 'comment' in typ.lower():
+                stats['comment_nodes']+=1
+            for k,v in node.items():
+                if not isinstance(v,(dict,list)):
+                    continue
+                if 'comment' in k.lower():
+                    stats['comment_containers']+=1
+                if 'reaction' in k.lower() or 'reactor' in k.lower():
+                    stats['reactor_containers']+=1
+                stack.append(v)
+        elif isinstance(node,list):
+            stack.extend(node[:150])
+    return stats
+
+
+_COMMENT_ENTRY_LABELS=re.compile(
+    r'(?:^|\b)(?:all\s+)?\d{0,8}\s*comments?\b|(?:view|see|show)\s+(?:all\s+)?comments'
+    r'|(?:عرض|مشاهدة|إظهار)\s+(?:كل\s+)?(?:\d+\s+)?التعليقات'
+    r'|(?:voir|afficher)\s+(?:les\s+)?commentaires'
+    r'|(?:visualizza|mostra)\s+(?:tutti\s+)?i\s+commenti'
+    r'|(?:yorumları\s+gör)',re.I)
+_REACTION_VIEW_LABELS=re.compile(
+    r'(?:people who reacted|view reactions|see who reacted|reactions?\s+\d+)'
+    r'|(?:المتفاعلين|من تفاعل|الأشخاص الذين تفاعلوا)'
+    r'|(?:réactions|reazioni|tepki)',re.I)
+
+
+def _safe_page_signals(page):
+    """Aggregate only UI counts, never document text or page HTML."""
+    try:
+        return page.evaluate(r"""() => {
+          const txt = v => (v||'').toLowerCase();
+          const triggers = [...document.querySelectorAll('a,button,[role="button"]')].slice(0,1200);
+          return {
+            comment_permalink_links:document.querySelectorAll('a[href*="comment_id="]').length,
+            comment_articles:document.querySelectorAll('[role="article"]').length,
+            comment_entry_candidates:triggers.filter(x=>/^(?:view |see |show )?(?:all |more )?\d*\s*comments?/.test(txt(x.innerText).trim()) || /التعليقات|commentaires|commenti/.test(txt(x.innerText))).length,
+            reaction_entry_candidates:triggers.filter(x=>/reactions?|تفاعل|réactions|reazioni|tepki/.test(txt(x.getAttribute('aria-label')))).length,
+            login_input:!!document.querySelector('input[name="email"],input[name="pass"]'),
+            page_title_is_login:/log in|se connecter|تسجيل الدخول/i.test(document.title),
+            lang:(document.documentElement.lang||'').slice(0,12)
+          };
+        }""")
+    except Exception:
+        return {'status':'unavailable'}
+
+def scrape_with_browser(url, comment_limit, reactor_limit, cookies_file, diagnostic_only=False):
     if os.getenv('FB_BROWSER_ENABLED','1').strip().lower() in ('0','false','no'):
         raise RuntimeError('BROWSER_DISABLED')
     if not cookies_file:
@@ -217,10 +290,17 @@ def scrape_with_browser(url, comment_limit, reactor_limit, cookies_file):
         comments={}
         reactors={}
         parsed_responses=0
+        graphql_http_seen=0
+        diagnostics={'source':'browser','status':'running',
+                     'graphql_seen':0,'graphql_decoded':0,
+                     'comment_shape_nodes':0,'comment_containers':0,'reactor_containers':0,
+                     'graphql_error_responses':0,'expand_clicks':0,
+                     'comment_dialog_opened':False,'reaction_dialog_opened':False,
+                     'rendered':{}}
         start=time.monotonic()
         max_duration=55
         def collect_response(response):
-            nonlocal parsed_responses
+            nonlocal parsed_responses,graphql_http_seen
             if parsed_responses>=MAX_GRAPHQL_RESPONSES or time.monotonic()-start>max_duration:
                 return
             try:
@@ -228,6 +308,8 @@ def scrape_with_browser(url, comment_limit, reactor_limit, cookies_file):
                 if not ((urlparts.hostname or '').lower().endswith('.facebook.com')
                         and '/api/graphql' in urlparts.path):
                     return
+                graphql_http_seen+=1
+                diagnostics['graphql_seen']=graphql_http_seen
                 if response.status!=200:
                     return
                 headers=response.headers
@@ -237,6 +319,12 @@ def scrape_with_browser(url, comment_limit, reactor_limit, cookies_file):
                 if len(content)>MAX_RESPONSE_BYTES:
                     return
                 parsed_responses+=1
+                shape=graphql_response_shape(content)
+                diagnostics['graphql_decoded']+=shape['json_documents']
+                diagnostics['comment_shape_nodes']+=shape['comment_nodes']
+                diagnostics['comment_containers']+=shape['comment_containers']
+                diagnostics['reactor_containers']+=shape['reactor_containers']
+                diagnostics['graphql_error_responses']+=shape['graphql_errors']
                 found_comments,found_reactors=parse_graphql_interactions(
                     content,comment_limit,reactor_limit)
                 for item in found_comments:
@@ -272,7 +360,28 @@ def scrape_with_browser(url, comment_limit, reactor_limit, cookies_file):
                 path=urlsplit(page.url).path.lower()
                 if '/login' in path or '/checkpoint' in path:
                     raise RuntimeError('BROWSER_LOGIN_OR_CHECKPOINT_REQUIRED')
-                for round_no in range(5):
+                diagnostics['rendered']=_safe_page_signals(page)
+                if diagnostics['rendered'].get('login_input') or diagnostics['rendered'].get('page_title_is_login'):
+                    if diagnostic_only:
+                        diagnostics['status']='login_wall_detected'
+                        context.close()
+                        return diagnostics
+                    raise RuntimeError('BROWSER_LOGIN_OR_CHECKPOINT_REQUIRED')
+                # Facebook often hides ALL comments behind the initial count
+                # control. Legacy code only clicked "View more comments",
+                # which never appears until the comments dialog opens.
+                if comment_limit and time.monotonic()-start < max_duration:
+                    for role in ('button','link'):
+                        try:
+                            candidate=page.get_by_role(role,name=_COMMENT_ENTRY_LABELS)
+                            if candidate.count() and candidate.first.is_visible():
+                                candidate.first.click(timeout=1700)
+                                diagnostics['comment_dialog_opened']=True
+                                page.wait_for_timeout(750)
+                                break
+                        except Exception:
+                            pass
+                for round_no in range(8):
                     if time.monotonic()-start>max_duration:
                         break
                     try:
@@ -290,27 +399,38 @@ def scrape_with_browser(url, comment_limit, reactor_limit, cookies_file):
                         break
                     # Click only load-more/expand-comment buttons, never any
                     # interaction that could write to or react to Facebook.
-                    try:
-                        buttons=page.get_by_role('button',name=_EXPAND_LABELS)
-                        if buttons.count():
-                            buttons.first.click(timeout=1800)
-                        else:
-                            page.mouse.wheel(0,650)
-                    except Exception:
-                        try: page.mouse.wheel(0,650)
-                        except Exception: pass
+                    expanded=False
+                    # Read-only expansion controls may be links or div role=button,
+                    # not always native <button> elements.
+                    for role in ('button','link'):
+                        try:
+                            buttons=page.get_by_role(role,name=_EXPAND_LABELS)
+                            if buttons.count() and buttons.first.is_visible():
+                                buttons.first.click(timeout=1800)
+                                diagnostics['expand_clicks']+=1
+                                expanded=True
+                                break
+                        except Exception:
+                            pass
+                    if not expanded:
+                        try:
+                            page.mouse.wheel(0,950)
+                        except Exception:
+                            pass
                     page.wait_for_timeout(900)
                 # Reaction names are loaded by Facebook only after opening its
                 # read-only people-who-reacted dialog. Never click a Like or
                 # other state-changing action.
                 if reactor_limit and len(reactors)<reactor_limit and time.monotonic()-start<max_duration:
                     try:
-                        trigger=page.get_by_role('button',name=re.compile(
-                            r'see who reacted|people who reacted|view reactions'
-                            r'|عرض المتفاعلين|من تفاعل|الأشخاص الذين تفاعلوا'
-                            r'|voir les réactions|chi ha reagito|kimler tepki verdi',re.I))
-                        if trigger.count():
+                        trigger=page.get_by_role('button',name=_REACTION_VIEW_LABELS)
+                        if not trigger.count():
+                            trigger=page.get_by_role('link',name=_REACTION_VIEW_LABELS)
+                        if not trigger.count():
+                            trigger=page.locator('a[href*="reaction/profile/browser"],a[href*="/ufi/reaction/"]')
+                        if trigger.count() and trigger.first.is_visible():
                             trigger.first.click(timeout=1700)
+                            diagnostics['reaction_dialog_opened']=True
                             page.wait_for_timeout(1000)
                             dialog=page.locator('[role="dialog"]')
                             if dialog.count():
@@ -335,8 +455,19 @@ def scrape_with_browser(url, comment_limit, reactor_limit, cookies_file):
                 context.close()
             finally:
                 browser.close()
-        logger.info('Facebook browser read-only capture: comments=%d reactors=%d gql_responses=%d',
-                    len(comments),len(reactors),parsed_responses)
+        diagnostics['rendered']=diagnostics.get('rendered') or {}
+        diagnostics['graphql_parsed']=parsed_responses
+        diagnostics['comments_extracted']=len(comments)
+        diagnostics['reactors_extracted']=len(reactors)
+        diagnostics['status']='data_found' if (comments or reactors) else (
+            'no_interaction_payloads_observed' if not diagnostics['comment_containers']
+            and not diagnostics['reactor_containers'] else 'interaction_shapes_unrecognized')
+        logger.info('Browser read-only: comments=%d reactors=%d gql=%d comment_shapes=%d react_containers=%d expand=%d status=%s',
+                    len(comments),len(reactors),parsed_responses,
+                    diagnostics['comment_shape_nodes'],diagnostics['reactor_containers'],
+                    diagnostics['expand_clicks'],diagnostics['status'])
+        if diagnostic_only:
+            return diagnostics
         if (not comments and not reactors):
             raise RuntimeError('BROWSER_NO_VERIFIABLE_INTERACTIONS')
         return {

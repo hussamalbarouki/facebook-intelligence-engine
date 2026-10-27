@@ -19,11 +19,13 @@ RUN python -m pip check && python -c "from facebook_scraper import get_posts; fr
 RUN python -m playwright install --with-deps chromium && chmod -R a+rX /opt/pw-browsers
 
 COPY app ./app
+COPY tests/browser_smoke.py ./browser_smoke.py
 USER engine
 # Smoke test the *runtime* browser during image build, as the unprivileged
 # engine user. A published image is not released if Chrome cannot launch.
 RUN python -c 'import os; assert all(os.access(p,os.W_OK) for p in (os.environ["HOME"],os.environ["XDG_CONFIG_HOME"],os.environ["XDG_CACHE_HOME"])); print("Chromium writable user paths OK")' \
     && python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True,args=["--disable-dev-shm-usage"]); page=b.new_page(); page.goto("data:text/html,<h1>browser-ready</h1>"); assert page.locator("h1").inner_text()=="browser-ready"; b.close(); p.stop(); print("headless Chromium smoke test OK")'
+RUN python browser_smoke.py
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/healthz",timeout=3)' || exit 1
 # The API must start independently of the browser subsystem.
