@@ -14,6 +14,9 @@ RUN python -m playwright install --with-deps chromium && chmod -R a+rX /opt/pw-b
 
 COPY app ./app
 USER engine
+# Smoke test the *runtime* browser during image build, as the unprivileged
+# engine user. A published image is not released if Chrome cannot launch.
+RUN xvfb-run -a -s "-screen 0 1280x900x24" python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=False,args=["--disable-dev-shm-usage"]); page=b.new_page(); page.goto("data:text/html,<h1>browser-ready</h1>"); assert page.locator("h1").inner_text()=="browser-ready"; b.close(); p.stop(); print("headed Chromium smoke test OK")'
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/healthz",timeout=3)' || exit 1
 # A virtual display lets Chromium run in normal headed mode even on a VPS.
