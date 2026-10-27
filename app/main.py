@@ -15,7 +15,7 @@ from .engine import scrape_post, validate_facebook_url
 from .secrets import CookieVault
 from .storage import JobStore
 
-VERSION='1.0.0'
+VERSION='1.0.1'
 log=logging.getLogger('fb-engine')
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 
