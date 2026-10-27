@@ -13,7 +13,7 @@ import tempfile
 from datetime import date, datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
-from .facebook_session import inspect_session
+from .facebook_session import inspect_session, configure_facebook_session
 
 log = logging.getLogger('fb-engine.adapter')
 
@@ -182,6 +182,10 @@ def _graphql_scrape(url, comment_limit, reactor_limit, cookies_file, reference):
     # in a temporary directory to avoid leaving secrets in persistent storage.
     with tempfile.TemporaryDirectory(prefix='fb-gql-state-') as tmp:
         class SessionAwareFacebookContext(gql.FacebookContext):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                configure_facebook_session(self.session)
+
             def _get_fb_dtsg(self):
                 if self.fb_dtsg:
                     return self.fb_dtsg
@@ -191,6 +195,7 @@ def _graphql_scrape(url, comment_limit, reactor_limit, cookies_file, reference):
                         'facebook_login_required':'FACEBOOK_SESSION_NOT_AUTHENTICATED',
                         'facebook_checkpoint':'FACEBOOK_CHECKPOINT_REQUIRED',
                         'facebook_access_restricted':'FACEBOOK_ACCESS_RESTRICTED',
+                        'facebook_http_bad_request':'FACEBOOK_HTTP_400',
                         'facebook_connection_error':'FACEBOOK_CONNECTION_ERROR',
                     }
                     raise ExtractionError(statuses.get(report['status'],'FB_DTSG_UNAVAILABLE'))
