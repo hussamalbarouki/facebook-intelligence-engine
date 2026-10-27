@@ -1,5 +1,6 @@
 import unittest
-from app.facebook_session import extract_dtsg, inspect_session, _page_status
+from app.facebook_session import extract_dtsg, inspect_session, _page_status, configure_facebook_session
+import requests
 
 class Response:
     def __init__(self, text, code=200, url='https://www.facebook.com/'):
@@ -28,6 +29,23 @@ class SessionTest(unittest.TestCase):
         report,token=inspect_session(lambda u:Response('<form><input name="email"><input name="pass"></form>'))
         self.assertEqual(report['status'],'facebook_login_required')
         self.assertIsNone(token)
+    def test_http_400_distinct_from_missing_token(self):
+        self.assertEqual(_page_status(Response('Bad Request', 400)), 'facebook_http_bad_request')
+
+    def test_use_actual_requests_ua_not_fake_chrome(self):
+        session=requests.Session()
+        session.headers.update({
+            'User-Agent':'Mozilla/5.0 Fake Chrome',
+            'sec-ch-ua':'\"Chromium\";v=\"152\"',
+            'sec-fetch-site':'same-origin',
+            'priority':'u=1, i',
+        })
+        configured=configure_facebook_session(session)
+        self.assertIs(configured,session)
+        self.assertEqual(session.headers['User-Agent'],requests.utils.default_headers()['User-Agent'])
+        for key in session.headers:
+            self.assertFalse(key.lower().startswith(('sec-ch-ua','sec-fetch-')))
+
     def test_restricted(self):
         report,token=inspect_session(lambda u:Response('Restricted',429))
         self.assertEqual(report['status'],'facebook_access_restricted')
