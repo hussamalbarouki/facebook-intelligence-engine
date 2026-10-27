@@ -15,7 +15,7 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
 
 logger=logging.getLogger('fb-engine.discovery')
-MAX_SCRIPTS=64
+MAX_SCRIPTS=96
 MAX_BODY_CHARS=2_000_000
 _SRC_JSON=re.compile(r'"src"\s*:\s*"((?:\\.|[^"\\]){5,2048})"', re.I)
 
@@ -54,7 +54,11 @@ def allowed_js_url(raw, base_url):
             or parts.port not in (None,443) or len(url)>2048):
         return None
     path=parts.path.lower()
-    if not (path.endswith('.js') or '/rsrc.php/' in path):
+    # rsrc.php is a shared Facebook asset path: it serves CSS as well as JS.
+    # Accepting the path alone allowed .css bodies into the JS VM and caused
+    # enormous SyntaxError tracebacks. Only JavaScript assets are eligible.
+    if (not path.endswith(('.js','.mjs')) or
+            any(path.endswith(ext) for ext in ('.css','.map','.png','.jpg','.jpeg','.webp','.svg','.json'))):
         return None
     return url
 
@@ -90,17 +94,43 @@ def alias_operation_id(operations, operation_name):
     return next(iter(matches)) if len(matches)==1 else None
 
 
+class RedactUpstreamEvaluationError(logging.Filter):
+    """Prevent V8 from printing full downloaded asset bodies in tracebacks."""
+    def filter(self, record):
+        if (record.name == 'facebook_gql_scraper.facebookOperationDiscovery'
+                and isinstance(record.msg,str)
+                and record.msg.startswith('Could not evaluate Facebook script')):
+            reason=(record.exc_info[0].__name__ if record.exc_info else 'UnknownError')
+            record.msg='Facebook JS asset evaluation failed: %s'
+            record.args=(reason,)
+            record.exc_info=None
+            record.exc_text=None
+        return True
+
+
 def extend_discovery(context, page_url):
     """Patch only this context's discovery instance, retaining upstream V8 logic."""
     discovery=getattr(context,'operation_discovery',None)
     if discovery is None or not hasattr(discovery,'_get_javascript_links'):
         return
+    # The upstream logger uses exc_info=True; a syntax error embeds the entire
+    # response (hundreds of KB of JS/CSS) in log output. Apply once per process.
+    upstream_logger=logging.getLogger('facebook_gql_scraper.facebookOperationDiscovery')
+    if not any(isinstance(f,RedactUpstreamEvaluationError) for f in upstream_logger.filters):
+        upstream_logger.addFilter(RedactUpstreamEvaluationError())
     original=discovery._get_javascript_links
     def upgraded(text):
         upstream=original(text)
         sources=find_javascript_sources(text,page_url,upstream)
         discovery.last_candidate_count=len(sources)
-        logger.info('Facebook GraphQL JS discovery: candidate_scripts=%d',len(sources))
+        discovery.last_css_excluded=sum(
+            1 for src in upstream
+            if isinstance(src,str) and (urlsplit(src).path or '').lower().endswith('.css'))
+        discovery.last_reached_limit=len(sources)>=MAX_SCRIPTS
+        logger.info('Facebook GraphQL JS discovery: candidate_scripts=%d css_excluded=%d capped=%s',
+                    len(sources),discovery.last_css_excluded,discovery.last_reached_limit)
         return sources
     discovery._get_javascript_links=upgraded
     discovery.last_candidate_count=0
+    discovery.last_css_excluded=0
+    discovery.last_reached_limit=False
