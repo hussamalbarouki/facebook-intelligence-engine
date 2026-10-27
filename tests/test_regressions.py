@@ -45,7 +45,9 @@ class AdapterRegressions(unittest.TestCase):
             def get_reactors(self):return iter([Reactor()])
         class MockContext:
             def __init__(self, **kwargs):
+                import requests
                 self.fb_dtsg = None
+                self.session = requests.Session()
         fake=types.SimpleNamespace(Post=Post,FacebookContext=MockContext)
         with patch.dict(sys.modules,{'facebook_gql_scraper':fake}):
             result=scrape_post(URL,2,2,'/tmp/fakecookie.json')
