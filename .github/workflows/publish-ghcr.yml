@@ -1,0 +1,47 @@
+name: Test and publish GHCR image
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install fastapi==0.119.1 httpx cryptography
+      - run: python -m unittest discover -s tests -v
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=Facebook extraction API, self-hosted
+      - name: Trigger Coolify after a successful image publish (optional)
+        if: ${{ success() }}
+        env:
+          COOLIFY_DEPLOY_WEBHOOK: ${{ secrets.COOLIFY_DEPLOY_WEBHOOK }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+        run: |
+          if [ -n "$COOLIFY_DEPLOY_WEBHOOK" ] && [ -n "$COOLIFY_TOKEN" ]; then
+            curl --fail-with-body --retry 2 --retry-delay 5 \
+              -H "Authorization: Bearer $COOLIFY_TOKEN" \
+              "$COOLIFY_DEPLOY_WEBHOOK"
+          else
+            echo "Coolify webhook not configured; deployment must be triggered manually."
+          fi

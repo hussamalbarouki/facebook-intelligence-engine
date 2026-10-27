@@ -1,0 +1,5 @@
+fastapi==0.119.1
+uvicorn==0.38.0
+cryptography>=43,<47
+# Fixed upstream commit for reproducibility; functionality may break as Facebook changes.
+facebook-scraper @ git+https://github.com/kevinzg/facebook-scraper.git@567711fbab3e014504a1d4f33f882c2b29d71584

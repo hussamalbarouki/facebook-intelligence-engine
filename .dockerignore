@@ -1,0 +1,10 @@
+.git
+.github
+php
+docs
+tests
+*.zip
+.env
+__pycache__
+*.pyc
+/data
