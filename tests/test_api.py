@@ -34,7 +34,12 @@ class ApiTest(unittest.TestCase):
         data=self.req('PUT','/v1/facebook/cookies',json={'cookies':{'c_user':'123','xs':'abc','datr':'abcde'}})
         self.assertEqual(data.status_code,200,data.text)
         self.assertNotIn('abcde',str(data.json()))
-        self.assertNotIn('123',str(self.req('GET','/v1/status').json()))
+        # Reject actual secret values only in the status payload, not arbitrary
+        # digit fragments that may also occur in timestamps.
+        status=self.req('GET','/v1/status').json()
+        self.assertNotIn("'c_user': '123'",str(status))
+        self.assertNotIn("'xs': 'abc'",str(status))
+        self.assertNotIn("'datr': 'abcde'",str(status))
         with self.app.state.vault.temporary_cookie_file() as path:
             import json
             with open(path) as f: cookies=json.load(f)
