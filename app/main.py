@@ -16,7 +16,7 @@ from .facebook_session import probe_cookie_file
 from .secrets import CookieVault
 from .storage import JobStore
 
-VERSION='1.2.1'
+VERSION='1.2.2'
 log=logging.getLogger('fb-engine')
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 
