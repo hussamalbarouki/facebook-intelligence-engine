@@ -99,16 +99,14 @@ def inspect_session(request_get):
 
 
 def configure_facebook_session(session):
-    """Use the Requests default User-Agent confirmed to receive HTTP 200.
+    """Match the minimal Requests headers that succeeded on this VPS.
 
-    The legacy GraphQL adapter sends a fabricated Chrome identity with browser
-    client hints; this VPS's Facebook responses reject the tested Chrome UA.
-    Do not pretend to be another browser or mix inconsistent sec-ch headers.
+    The upstream GraphQL client sends web.facebook.com Origin/Referer and a
+    synthetic browser fingerprint. Those extra headers are not present in the
+    successful authenticated preflight, so avoid carrying them over.
     """
-    for name in list(session.headers):
-        if name.lower().startswith(('sec-ch-ua', 'sec-fetch-')) or name.lower() == 'priority':
-            session.headers.pop(name, None)
-    session.headers['User-Agent'] = requests.utils.default_headers()['User-Agent']
+    session.headers.clear()
+    session.headers.update(requests.utils.default_headers())
     session.headers['Accept-Language'] = 'en-US,en;q=0.8'
     return session
 
