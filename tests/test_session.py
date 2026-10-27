@@ -39,12 +39,15 @@ class SessionTest(unittest.TestCase):
             'sec-ch-ua':'\"Chromium\";v=\"152\"',
             'sec-fetch-site':'same-origin',
             'priority':'u=1, i',
+            'Origin':'https://web.facebook.com',
+            'Referer':'https://web.facebook.com/',
         })
         configured=configure_facebook_session(session)
         self.assertIs(configured,session)
         self.assertEqual(session.headers['User-Agent'],requests.utils.default_headers()['User-Agent'])
         for key in session.headers:
             self.assertFalse(key.lower().startswith(('sec-ch-ua','sec-fetch-')))
+            self.assertNotIn(key.lower(),('origin','referer','priority'))
 
     def test_restricted(self):
         report,token=inspect_session(lambda u:Response('Restricted',429))
