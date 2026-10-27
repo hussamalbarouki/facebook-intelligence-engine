@@ -35,6 +35,7 @@ class ShareResolutionTest(unittest.TestCase):
             path=directory+'/cookies.json'
             with open(path,'w') as f:json.dump([],f)
             session=Mock()
+            session.headers={}
             session.__enter__=Mock(return_value=session)
             session.__exit__=Mock(return_value=False)
             session.get.return_value=Response('<meta property="og:url" content="'+POST+'">',url=SHARE)
@@ -47,6 +48,7 @@ class ShareResolutionTest(unittest.TestCase):
             path=directory+'/cookies.json'
             with open(path,'w') as f:json.dump([],f)
             session=Mock()
+            session.headers={}
             session.__enter__=Mock(return_value=session)
             session.__exit__=Mock(return_value=False)
             session.get.return_value=Response(status_code=302,headers={'Location':'https://evil.test/steal'})
