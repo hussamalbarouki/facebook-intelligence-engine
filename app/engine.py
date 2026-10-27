@@ -13,6 +13,8 @@ import tempfile
 from datetime import date, datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
+from .facebook_session import inspect_session
+
 log = logging.getLogger('fb-engine.adapter')
 
 
@@ -179,8 +181,25 @@ def _graphql_scrape(url, comment_limit, reactor_limit, cookies_file, reference):
     # The GraphQL library normally persists auth-derived fb_dtsg state. Keep it
     # in a temporary directory to avoid leaving secrets in persistent storage.
     with tempfile.TemporaryDirectory(prefix='fb-gql-state-') as tmp:
-        ctx=gql.FacebookContext(cookies_file=cookies_file,
-                                state_file=os.path.join(tmp,'state.json'),quiet=True)
+        class SessionAwareFacebookContext(gql.FacebookContext):
+            def _get_fb_dtsg(self):
+                if self.fb_dtsg:
+                    return self.fb_dtsg
+                report, token = inspect_session(self.get)
+                if not token:
+                    statuses = {
+                        'facebook_login_required':'FACEBOOK_SESSION_NOT_AUTHENTICATED',
+                        'facebook_checkpoint':'FACEBOOK_CHECKPOINT_REQUIRED',
+                        'facebook_access_restricted':'FACEBOOK_ACCESS_RESTRICTED',
+                        'facebook_connection_error':'FACEBOOK_CONNECTION_ERROR',
+                    }
+                    raise ExtractionError(statuses.get(report['status'],'FB_DTSG_UNAVAILABLE'))
+                self.fb_dtsg=token
+                self._save_state()
+                return token
+
+        ctx=SessionAwareFacebookContext(cookies_file=cookies_file,
+                                        state_file=os.path.join(tmp,'state.json'),quiet=True)
         kind, identifier=reference
         if kind=='pfbid':
             post=gql.Post.from_pfbid(ctx,pfbid=identifier)
@@ -245,6 +264,10 @@ def scrape_post(url, comment_limit, reactor_limit, cookies_file=None):
                 return result
             attempted.append('graphql-empty')
             last_code='NO_INTERACTIONS_EXTRACTED'
+        except ExtractionError as exc:
+            log.warning('GraphQL session bootstrap or extraction failed: %s',exc.code)
+            attempted.append('graphql-'+exc.code.lower())
+            last_code=exc.code
         except Exception as exc:
             log.warning('GraphQL adapter failed: %s',type(exc).__name__)
             attempted.append('graphql-failed')

@@ -12,10 +12,11 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 from .engine import scrape_post, validate_facebook_url, ExtractionError
+from .facebook_session import probe_cookie_file
 from .secrets import CookieVault
 from .storage import JobStore
 
-VERSION='1.1.0'
+VERSION='1.2.0'
 log=logging.getLogger('fb-engine')
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 
@@ -80,10 +81,8 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
                 log.warning('Extraction failed for job %s: %s',row['id'],exc.code)
                 store.finish(row['id'],error=exc.code)
             except ImportError as exc:
-                # A dependency failure is not a Facebook login failure. Log the traceback
-                # on the server so the precise missing import can be diagnosed.
-                log.exception('Scraper dependency import failed for job %s', row['id'])
-                store.finish(row['id'], error='DEPENDENCY_IMPORT_ERROR')
+                log.exception('Dependency import failed for job %s',row['id'])
+                store.finish(row['id'],error='DEPENDENCY_IMPORT_ERROR')
             except Exception as exc:
                 # Safe public error; secrets and third-party URLs never logged.
                 log.warning('Scraper error for job %s: %s',row['id'],type(exc).__name__)
@@ -107,12 +106,12 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
 
     @app.get('/v1/capabilities',dependencies=[Depends(authorize)])
     def capabilities():
-        return {'version':VERSION,'adapter':'graphql-primary + legacy-html-fallback','supports':['graphql_adapter','legacy_html_fallback','posts','comments','comment_replies','reactors','reaction_types','cookie_management','jobs','pagination'],
-                'limits':{'comments':1000,'reactors':1000},'known_limitations':['Facebook may require cookies or block scraping','Reaction lists may be partial','No live Facebook test is performed in CI','Undetectable or inaccessible Facebook posts cannot be extracted']}
+        return {'version':VERSION,'adapter':'graphql-primary + legacy-html-fallback','supports':['session_diagnostics','posts','comments','comment_replies','reactors','reaction_types','cookie_management','jobs','pagination'],
+                'limits':{'comments':1000,'reactors':1000},'known_limitations':['Facebook may require cookies or block scraping','Reaction lists may be partial','No live Facebook test is performed in CI','Accessible sessions do not guarantee all posts are readable']}
 
     @app.get('/v1/status',dependencies=[Depends(authorize)])
     def status():
-        return {'ok':True,'version':VERSION,'adapter':'kevinzg/facebook-scraper',
+        return {'ok':True,'version':VERSION,'adapter':'graphql-primary + legacy-html-fallback',
                 'cookies':vault.status(),'settings':store.settings(),'queue':store.metrics()}
 
     @app.get('/v1/settings',dependencies=[Depends(authorize)])
@@ -136,6 +135,12 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
 
     @app.delete('/v1/facebook/cookies',dependencies=[Depends(authorize)])
     def cookies_delete():return vault.delete()
+
+    @app.get('/v1/facebook/session-check',dependencies=[Depends(authorize)])
+    def session_check():
+        # Credentials are read only on VPS and never sent back to the browser.
+        with vault.temporary_cookie_file() as cookie_path:
+            return probe_cookie_file(cookie_path)
 
     @app.post('/v1/jobs',status_code=202,dependencies=[Depends(authorize)])
     def submit(body:JobRequest):
