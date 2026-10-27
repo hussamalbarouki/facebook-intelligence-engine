@@ -14,6 +14,7 @@ from datetime import date, datetime, timezone
 from urllib.parse import parse_qs, urlparse
 
 from .facebook_session import inspect_session, configure_facebook_session, apply_facebook_cookies
+from .graphql_discovery import extend_discovery, alias_operation_id
 
 log = logging.getLogger('fb-engine.adapter')
 
@@ -296,11 +297,27 @@ def _graphql_scrape(url, comment_limit, reactor_limit, cookies_file, reference):
             def __init__(self, **kwargs):
                 super().__init__(**kwargs)
                 configure_facebook_session(self.session)
+                extend_discovery(self,discovery_url)
 
             def _resolve_doc_id(self, operation_name, reference_page_url):
-                # Keep the upstream discovery/cache machinery but point its
-                # page-loading phase at the actual requested Facebook post.
-                return super()._resolve_doc_id(operation_name, discovery_url)
+                # Fetch the selected post's Comet JS bundles, including embedded
+                # rsrcMap scripts omitted by the upstream HTML-only parser.
+                try:
+                    return super()._resolve_doc_id(operation_name,discovery_url)
+                except LookupError:
+                    candidate=alias_operation_id(
+                        getattr(self,'page_operations',{}).get(discovery_url,{}),
+                        operation_name)
+                    if candidate:
+                        log.info('GraphQL operation found under compatible .graphql alias')
+                        self.operations[operation_name]=candidate
+                        self._save_state()
+                        return candidate
+                    candidate_count=getattr(getattr(self,'operation_discovery',None),
+                                            'last_candidate_count',None)
+                    log.warning('Facebook GraphQL operation unavailable: candidates=%s',
+                                candidate_count if candidate_count is not None else 'unknown')
+                    raise ExtractionError('GRAPHQL_DOC_ID_UNAVAILABLE') from None
 
             def get(self, resource_url):
                 try:
