@@ -4,7 +4,6 @@ services:
     restart: unless-stopped
     environment:
       API_KEY: ${API_KEY:?set-a-strong-random-key}
-      FACEBOOK_COOKIES_JSON: ${FACEBOOK_COOKIES_JSON:-}
       DATA_DIR: /data
     volumes:
       - facebook-engine-data:/data
