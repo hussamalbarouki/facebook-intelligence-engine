@@ -181,10 +181,30 @@ def _graphql_scrape(url, comment_limit, reactor_limit, cookies_file, reference):
     # The GraphQL library normally persists auth-derived fb_dtsg state. Keep it
     # in a temporary directory to avoid leaving secrets in persistent storage.
     with tempfile.TemporaryDirectory(prefix='fb-gql-state-') as tmp:
+        # Operation discovery must use the requested post, not a hardcoded
+        # unrelated celebrity post bundled into the third-party library.
+        discovery_url=url
         class SessionAwareFacebookContext(gql.FacebookContext):
             def __init__(self, **kwargs):
                 super().__init__(**kwargs)
                 configure_facebook_session(self.session)
+
+            def _resolve_doc_id(self, operation_name, reference_page_url):
+                # Keep the upstream discovery/cache machinery but point its
+                # page-loading phase at the actual requested Facebook post.
+                return super()._resolve_doc_id(operation_name, discovery_url)
+
+            def get(self, resource_url):
+                try:
+                    return super().get(resource_url)
+                except gql.SessionExpiredError:
+                    from urllib.parse import urlsplit
+                    host=urlsplit(resource_url).hostname or 'unknown'
+                    stage='post' if resource_url == discovery_url else 'asset_or_reference'
+                    # Never log Cookie/CSRF values or raw Facebook response.
+                    log.warning('Facebook rejected session during GraphQL page discovery: stage=%s host=%s',
+                                stage, host)
+                    raise ExtractionError('FACEBOOK_SESSION_REJECTED_DURING_DISCOVERY') from None
 
             def _get_fb_dtsg(self):
                 if self.fb_dtsg:
@@ -274,9 +294,14 @@ def scrape_post(url, comment_limit, reactor_limit, cookies_file=None):
             attempted.append('graphql-'+exc.code.lower())
             last_code=exc.code
         except Exception as exc:
-            log.warning('GraphQL adapter failed: %s',type(exc).__name__)
-            attempted.append('graphql-failed')
-            last_code='GRAPHQL_EXTRACT_FAILED'
+            reason = type(exc).__name__
+            log.warning('GraphQL adapter failed: %s', reason)
+            if reason == 'SessionExpiredError':
+                attempted.append('graphql-session-rejected')
+                last_code='FACEBOOK_SESSION_REJECTED_ON_GRAPHQL'
+            else:
+                attempted.append('graphql-failed')
+                last_code='GRAPHQL_EXTRACT_FAILED'
     try:
         result=_legacy_scrape(url,comment_limit,reactor_limit,cookies_file)
         if _has_requested_interactions(result,comment_limit,reactor_limit):
