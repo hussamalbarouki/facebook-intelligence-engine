@@ -48,8 +48,11 @@ jobs:
             -e API_KEY=abcdefghijklmnopqrstuvwxyzABCDEF \
             -p 127.0.0.1:18765:8000 "$IMAGE"
           trap 'docker stop fb-engine-api-smoke >/dev/null 2>&1 || true' EXIT
+          EXPECTED_VERSION=$(sed -n "s/^VERSION='\\([^']*\\)'/\\1/p" app/main.py)
+          test -n "$EXPECTED_VERSION"
           for attempt in $(seq 1 30); do
-            if curl --fail --silent --max-time 2 http://127.0.0.1:18765/healthz | grep -q '"version":"1.3.1"'; then
+            if curl --fail --silent --max-time 2 http://127.0.0.1:18765/healthz \
+              | python -c 'import json,sys; d=json.load(sys.stdin); assert d.get("ok") is True and d.get("service")=="facebook-intelligence-engine" and d.get("version")==sys.argv[1]' "$EXPECTED_VERSION" 2>/dev/null; then
               echo "Real-container API startup and public health route OK"
               exit 0
             fi
