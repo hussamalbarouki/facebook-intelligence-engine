@@ -76,6 +76,11 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
                     result=scraper(row['url'],row['comment_limit'],row['reactor_limit'],cookie_path)
                 last_run=time.monotonic()
                 store.finish(row['id'],result=result)
+            except ImportError as exc:
+                # A dependency failure is not a Facebook login failure. Log the traceback
+                # on the server so the precise missing import can be diagnosed.
+                log.exception('Scraper dependency import failed for job %s', row['id'])
+                store.finish(row['id'], error='DEPENDENCY_IMPORT_ERROR')
             except Exception as exc:
                 # Safe public error; secrets and third-party URLs never logged.
                 log.warning('Scraper error for job %s: %s',row['id'],type(exc).__name__)

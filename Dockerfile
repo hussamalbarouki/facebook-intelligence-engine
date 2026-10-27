@@ -5,6 +5,8 @@ RUN groupadd --system engine && useradd --system --gid engine --home-dir /servic
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# Build must fail if the scraper cannot import (unit tests use a fake scraper).
+RUN python -m pip check && python -c "from facebook_scraper import get_posts; from requests_html import HTMLSession; print('facebook-scraper import smoke test OK')"
 COPY app ./app
 USER engine
 EXPOSE 8000
