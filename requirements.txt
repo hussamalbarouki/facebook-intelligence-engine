@@ -5,3 +5,6 @@ cryptography>=43,<47
 facebook-scraper @ git+https://github.com/kevinzg/facebook-scraper.git@567711fbab3e014504a1d4f33f882c2b29d71584
 # requests-html uses lxml.html.clean, moved into its own package in lxml>=5.2.
 lxml_html_clean==0.4.5
+
+# GraphQL-based fallback/primary adapter for current Facebook UI, pinned to reviewed commit.
+facebook-gql-scraper @ git+https://github.com/XD-MHLOO/facebook-gql-scraper.git@85849e2295c9e36f5ba333217c72f769fb96a671

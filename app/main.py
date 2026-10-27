@@ -11,11 +11,11 @@ from typing import Any, Literal
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
-from .engine import scrape_post, validate_facebook_url
+from .engine import scrape_post, validate_facebook_url, ExtractionError
 from .secrets import CookieVault
 from .storage import JobStore
 
-VERSION='1.0.1'
+VERSION='1.1.0'
 log=logging.getLogger('fb-engine')
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 
@@ -76,6 +76,9 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
                     result=scraper(row['url'],row['comment_limit'],row['reactor_limit'],cookie_path)
                 last_run=time.monotonic()
                 store.finish(row['id'],result=result)
+            except ExtractionError as exc:
+                log.warning('Extraction failed for job %s: %s',row['id'],exc.code)
+                store.finish(row['id'],error=exc.code)
             except ImportError as exc:
                 # A dependency failure is not a Facebook login failure. Log the traceback
                 # on the server so the precise missing import can be diagnosed.
@@ -104,8 +107,8 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
 
     @app.get('/v1/capabilities',dependencies=[Depends(authorize)])
     def capabilities():
-        return {'version':VERSION,'adapter':'kevinzg/facebook-scraper','supports':['posts','comments','comment_replies','reactors','reaction_types','cookie_management','jobs','pagination'],
-                'limits':{'comments':1000,'reactors':1000},'known_limitations':['Facebook may require cookies or block scraping','Reaction lists may be partial','No live Facebook test is performed in CI']}
+        return {'version':VERSION,'adapter':'graphql-primary + legacy-html-fallback','supports':['graphql_adapter','legacy_html_fallback','posts','comments','comment_replies','reactors','reaction_types','cookie_management','jobs','pagination'],
+                'limits':{'comments':1000,'reactors':1000},'known_limitations':['Facebook may require cookies or block scraping','Reaction lists may be partial','No live Facebook test is performed in CI','Undetectable or inaccessible Facebook posts cannot be extracted']}
 
     @app.get('/v1/status',dependencies=[Depends(authorize)])
     def status():
