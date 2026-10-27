@@ -40,7 +40,14 @@ class AdapterRegressions(unittest.TestCase):
             owner=Profile();comments_count=1;reaction_count='1';share_count=0
             top_reaction_breakdown=[{'name':'Like','count':1}]
             @classmethod
-            def from_post_id(cls,ctx,post_id):return cls()
+            def from_post_id(cls,ctx,post_id):
+                # The operation should be discovered on the requested URL,
+                # never a hardcoded post belonging to another profile.
+                result=ctx._resolve_doc_id(
+                    'CometSinglePostDialogContentQuery_facebookRelayOperation',
+                    'https://www.facebook.com/Cristiano/posts/pfbid02example')
+                assert result == URL, 'Unexpected hardcoded operation discovery reference'
+                return cls()
             def get_comments(self):return iter([Comment()])
             def get_reactors(self):return iter([Reactor()])
         class MockContext:
@@ -48,6 +55,8 @@ class AdapterRegressions(unittest.TestCase):
                 import requests
                 self.fb_dtsg = None
                 self.session = requests.Session()
+            def _resolve_doc_id(self, operation_name, reference_page_url):
+                return reference_page_url
         fake=types.SimpleNamespace(Post=Post,FacebookContext=MockContext)
         with patch.dict(sys.modules,{'facebook_gql_scraper':fake}):
             result=scrape_post(URL,2,2,'/tmp/fakecookie.json')
