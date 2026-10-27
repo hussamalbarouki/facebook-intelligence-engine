@@ -111,6 +111,95 @@ def configure_facebook_session(session):
     return session
 
 
+def _post_response_report(response):
+    """Sanitized classification of a single Facebook response, never its body."""
+    from urllib.parse import urlsplit
+    raw_location = response.headers.get('Location', '')
+    parsed_location = urlsplit(raw_location)
+    path = (parsed_location.path or '').lower()
+    location_host = (parsed_location.hostname or '').lower()
+    if '/checkpoint' in path or '/two_step_verification' in path:
+        redirect_kind = 'checkpoint'
+    elif '/login' in path or '/recover' in path:
+        redirect_kind = 'login'
+    elif location_host and location_host not in ('facebook.com','www.facebook.com','web.facebook.com','m.facebook.com'):
+        redirect_kind = 'external'
+    elif raw_location:
+        redirect_kind = 'facebook_or_relative'
+    else:
+        redirect_kind = 'none'
+    set_cookie = response.headers.get('set-cookie','').lower()
+    set_login = response.headers.get('set-login','').lower()
+    cookie_deleted = bool(re.search(r'(?:^|[,\s])c_user=deleted(?:[;,]|$)',set_cookie))
+    login_rejected = 'logged-out' in set_login
+    body = response.text[:50000].lower()
+    login_form = ('name="email"' in body and 'name="pass"' in body)
+    code = response.status_code
+    if cookie_deleted or login_rejected:
+        classification = 'facebook_rejected_login_cookie'
+    elif redirect_kind == 'checkpoint':
+        classification = 'checkpoint_redirect'
+    elif redirect_kind == 'login' or login_form:
+        classification = 'login_required_or_wall'
+    elif code in (403,429):
+        classification = 'request_restricted'
+    elif code >= 400:
+        classification = 'http_error'
+    elif 300 <= code < 400:
+        classification = 'redirect'
+    elif code == 200:
+        classification = 'html_received_not_proof_of_post_access'
+    else:
+        classification = 'unrecognized'
+    return {
+        'http_status': code,
+        'classification': classification,
+        'redirect_kind': redirect_kind,
+        'cookie_deletion_requested': cookie_deleted,
+        'set_login_logged_out': login_rejected,
+        'login_form_seen': login_form,
+        'fb_dtsg_in_page': bool(extract_dtsg(response.text[:250000])),
+        'content_type': response.headers.get('content-type','').split(';')[0].lower(),
+    }
+
+
+def probe_post_access(cookie_path: str | None, post_url: str):
+    """Compare minimal versus upstream HTML Accept request on an existing job URL.
+
+    Does not follow redirects or expose Facebook page text, response headers,
+    cookie values, tokens, query parameters, or raw redirect destinations.
+    Each probe uses a fresh session to avoid cross-request cookie mutations.
+    """
+    if not cookie_path:
+        return {'status':'cookies_not_configured'}
+    try:
+        with open(cookie_path,encoding='utf-8') as stream:
+            cookies = json.load(stream)
+        if not isinstance(cookies,list):
+            return {'status':'cookies_format_invalid'}
+    except (OSError, ValueError, TypeError):
+        return {'status':'cookies_format_invalid'}
+    results = {}
+    variants = {
+        'minimal': None,
+        'html_accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7'
+    }
+    for name, accept in variants.items():
+        try:
+            with requests.Session() as session:
+                configure_facebook_session(session)
+                for item in cookies:
+                    if isinstance(item,dict) and isinstance(item.get('name'),str) and isinstance(item.get('value'),str):
+                        session.cookies.set(item['name'],item['value'],domain='.facebook.com',path='/')
+                headers = {'Accept':accept} if accept else None
+                response = session.get(post_url,timeout=(5,15),allow_redirects=False,headers=headers)
+                results[name] = _post_response_report(response)
+        except requests.RequestException as error:
+            results[name] = {'classification':'connection_error','exception_type':type(error).__name__}
+    return {'status':'diagnostic_complete', 'variants':results,
+            'note':'HTTP 200 or a CSRF token does not prove access to the requested post. No secrets or page bodies are returned.'}
+
+
 def probe_cookie_file(cookie_path: str | None):
     if not cookie_path:
         return {'status':'cookies_not_configured','token_available':False}
