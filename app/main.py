@@ -11,12 +11,12 @@ from typing import Any, Literal
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
-from .engine import scrape_post, validate_facebook_url, ExtractionError
+from .engine import scrape_post, validate_facebook_url, ExtractionError, parse_post_reference, is_share_link
 from .facebook_session import probe_cookie_file, probe_post_access
 from .secrets import CookieVault
 from .storage import JobStore
 
-VERSION='1.2.4'
+VERSION='1.2.5'
 log=logging.getLogger('fb-engine')
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 
@@ -173,8 +173,10 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
         row=store.get(job_id)
         if not row:raise HTTPException(status_code=404,detail='Job not found')
         # URL was validated at creation, and is never accepted as arbitrary host.
+        kind=parse_post_reference(row['url'])
         with vault.temporary_cookie_file() as cookie_path:
-            return {'job_id':job_id,**probe_post_access(cookie_path,row['url'])}
+            result=probe_post_access(cookie_path,row['url'])
+        return {'job_id':job_id,'reference_kind':kind[0] if kind else 'opaque_share' if is_share_link(row['url']) else 'unsupported','graphql_candidate':bool(kind) or is_share_link(row['url']),**result}
 
     @app.post('/v1/jobs/{job_id}/retry',dependencies=[Depends(authorize)])
     def retry(job_id:str):

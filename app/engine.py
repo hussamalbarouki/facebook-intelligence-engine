@@ -72,6 +72,106 @@ def parse_post_reference(url: str) -> tuple[str, str] | None:
     return None
 
 
+
+def is_share_link(url: str) -> bool:
+    """Opaque /share/ URLs do not identify a GraphQL post on their own."""
+    path=urlparse(validate_facebook_url(url)).path.lower()
+    return path.startswith('/share/')
+
+
+def resolve_share_link(url: str, cookies_file: str) -> tuple[str, tuple[str,str]]:
+    """Resolve Facebook-owned share URLs without blindly following redirects.
+
+    Stop at the first unambiguous post link. Other hosts and arbitrary
+    redirects are rejected; never use an external redirect as an HTTP target.
+    """
+    import html
+    import json
+    import requests
+    from html.parser import HTMLParser
+    from urllib.parse import urljoin
+    from .facebook_session import apply_facebook_cookies, configure_facebook_session
+
+    class PermalinkParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.urls=[]
+        def handle_starttag(self, tag, attrs):
+            data=dict(attrs)
+            if tag == 'link' and 'canonical' in data.get('rel','').lower():
+                self.urls.append(data.get('href',''))
+            if tag == 'meta' and data.get('property','').lower() == 'og:url':
+                self.urls.append(data.get('content',''))
+
+    with open(cookies_file,encoding='utf-8') as f:
+        cookie_data=json.load(f)
+    with requests.Session() as session:
+        configure_facebook_session(session)
+        apply_facebook_cookies(session,cookie_data)
+        current=url
+        for _ in range(5):
+            validate_facebook_url(current)
+            reference=parse_post_reference(current)
+            if reference is not None:
+                return current,reference
+            r=session.get(current,timeout=(5,18),allow_redirects=False)
+            if 300 <= r.status_code < 400:
+                location=r.headers.get('Location')
+                if not location:
+                    raise ExtractionError('FACEBOOK_SHARE_REDIRECT_MISSING')
+                current=urljoin(current,location)
+                validate_facebook_url(current)
+                continue
+            if r.status_code != 200:
+                raise ExtractionError('FACEBOOK_SHARE_HTTP_ERROR')
+            parser=PermalinkParser()
+            parser.feed(r.text[:1000000])
+            for target in parser.urls:
+                if not target:
+                    continue
+                candidate=html.unescape(urljoin(current,target))
+                try:
+                    validate_facebook_url(candidate)
+                    ref=parse_post_reference(candidate)
+                except ValueError:
+                    continue
+                if ref:
+                    return candidate,ref
+            raise ExtractionError('FACEBOOK_SHARE_LINK_UNRESOLVED')
+    raise ExtractionError('FACEBOOK_SHARE_REDIRECT_LIMIT')
+
+
+def resolve_pfbid_numeric_id(ctx, url: str, pfbid: str) -> str:
+    """Resolve from a permalink's redirect or a unique post_id close to PFBID.
+
+    Do not select arbitrary post IDs from feed content: ambiguity is an error.
+    """
+    response=ctx.get(url)
+    if getattr(response,'status_code',0) != 200:
+        raise ExtractionError('FACEBOOK_POST_HTTP_ERROR')
+    final_url=getattr(response,'url','') or ''
+    try:
+        reference=parse_post_reference(final_url)
+        if reference and reference[0] == 'id':
+            return reference[1]
+    except ValueError:
+        pass
+    raw=getattr(response,'text','')
+    if not isinstance(raw,str):
+        raise ExtractionError('FACEBOOK_PFBID_UNRESOLVED')
+    normalized=raw.replace('\\/','/').replace('\\"','"')
+    candidates=set()
+    key=re.compile(r'"(?:post_id|story_fbid|postId)"\s*:\s*"?(?P<id>\d{8,30})')
+    for found in re.finditer(re.escape(pfbid),normalized):
+        vicinity=normalized[max(0,found.start()-450):min(len(normalized),found.end()+450)]
+        candidates.update(m.group('id') for m in key.finditer(vicinity))
+    if len(candidates)==1:
+        return next(iter(candidates))
+    if len(candidates)>1:
+        raise ExtractionError('FACEBOOK_PFBID_AMBIGUOUS')
+    raise ExtractionError('FACEBOOK_PFBID_UNRESOLVED')
+
+
 def _string(value):
     if isinstance(value, (datetime, date)):
         return value.isoformat()
@@ -234,8 +334,13 @@ def _graphql_scrape(url, comment_limit, reactor_limit, cookies_file, reference):
         ctx=SessionAwareFacebookContext(cookies_file=cookies_file,
                                         state_file=os.path.join(tmp,'state.json'),quiet=True)
         kind, identifier=reference
+        log.info('Extracting Facebook post: reference_kind=%s',kind)
         if kind=='pfbid':
-            post=gql.Post.from_pfbid(ctx,pfbid=identifier)
+            try:
+                post=gql.Post.from_pfbid(ctx,pfbid=identifier)
+            except gql.PostNotFoundError:
+                identifier=resolve_pfbid_numeric_id(ctx,url,identifier)
+                post=gql.Post.from_post_id(ctx,post_id=identifier)
         else:
             post=gql.Post.from_post_id(ctx,post_id=identifier)
         comments=[]
@@ -289,10 +394,22 @@ def scrape_post(url, comment_limit, reactor_limit, cookies_file=None):
     """
     reference=parse_post_reference(url)
     attempted=[]
-    last_code='POST_NOT_PARSED'
+    last_code='POST_URL_UNSUPPORTED' if reference is None else 'POST_NOT_PARSED'
+    resolved_url=url
+    if cookies_file and not reference and is_share_link(url):
+        try:
+            resolved_url,reference=resolve_share_link(url,cookies_file)
+            log.info('Opaque Facebook share URL resolved: kind=%s',reference[0])
+        except ExtractionError as exc:
+            attempted.append('share-link-unresolved')
+            last_code=exc.code
+        except Exception as exc:
+            log.warning('Facebook share link resolution failed: %s',type(exc).__name__)
+            attempted.append('share-link-failed')
+            last_code='FACEBOOK_SHARE_LINK_UNRESOLVED'
     if cookies_file and reference:
         try:
-            result=_graphql_scrape(url,comment_limit,reactor_limit,cookies_file,reference)
+            result=_graphql_scrape(resolved_url,comment_limit,reactor_limit,cookies_file,reference)
             if _has_requested_interactions(result,comment_limit,reactor_limit):
                 return result
             attempted.append('graphql-empty')
@@ -307,11 +424,14 @@ def scrape_post(url, comment_limit, reactor_limit, cookies_file=None):
             if reason == 'SessionExpiredError':
                 attempted.append('graphql-session-rejected')
                 last_code='FACEBOOK_SESSION_REJECTED_ON_GRAPHQL'
+            elif reason == 'PostNotFoundError':
+                attempted.append('graphql-post-unresolved')
+                last_code='GRAPHQL_POST_NOT_RESOLVED'
             else:
                 attempted.append('graphql-failed')
                 last_code='GRAPHQL_EXTRACT_FAILED'
     try:
-        result=_legacy_scrape(url,comment_limit,reactor_limit,cookies_file)
+        result=_legacy_scrape(resolved_url,comment_limit,reactor_limit,cookies_file)
         if _has_requested_interactions(result,comment_limit,reactor_limit):
             return result
         attempted.append('legacy-empty')
