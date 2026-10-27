@@ -9,7 +9,7 @@ RUN groupadd --system engine && useradd --system --gid engine --create-home --ho
     && mkdir -p /data /home/engine/.config /home/engine/.cache \
     && chown -R engine:engine /data /home/engine \
     && chmod 700 /home/engine/.config /home/engine/.cache
-RUN apt-get update && apt-get install -y --no-install-recommends git xvfb xauth && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 # Build must fail if the scraper cannot import (unit tests use a fake scraper).
@@ -23,9 +23,9 @@ USER engine
 # Smoke test the *runtime* browser during image build, as the unprivileged
 # engine user. A published image is not released if Chrome cannot launch.
 RUN python -c 'import os; assert all(os.access(p,os.W_OK) for p in (os.environ["HOME"],os.environ["XDG_CONFIG_HOME"],os.environ["XDG_CACHE_HOME"])); print("Chromium writable user paths OK")' \
-    && xvfb-run -a -s "-screen 0 1280x900x24" python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=False,args=["--disable-dev-shm-usage"]); page=b.new_page(); page.goto("data:text/html,<h1>browser-ready</h1>"); assert page.locator("h1").inner_text()=="browser-ready"; b.close(); p.stop(); print("headed Chromium smoke test OK")'
+    && python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True,args=["--disable-dev-shm-usage"]); page=b.new_page(); page.goto("data:text/html,<h1>browser-ready</h1>"); assert page.locator("h1").inner_text()=="browser-ready"; b.close(); p.stop(); print("headless Chromium smoke test OK")'
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/healthz",timeout=3)' || exit 1
-# A virtual display lets Chromium run in normal headed mode even on a VPS.
-# No web UI is publicly exposed. Python API remains single worker.
-CMD ["xvfb-run", "-a", "-s", "-screen 0 1280x900x24", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# The API must start independently of the browser subsystem.
+# The fallback launches its own headless browser only when needed.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

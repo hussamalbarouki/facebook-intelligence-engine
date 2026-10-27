@@ -36,6 +36,28 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description=Facebook extraction API, self-hosted
+      - name: Smoke test live API health from Docker
+        timeout-minutes: 3
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker pull "$IMAGE"
+          docker run -d --rm --name fb-engine-api-smoke \
+            --memory=2g --cpus=2 \
+            -e API_KEY=abcdefghijklmnopqrstuvwxyzABCDEF \
+            -p 127.0.0.1:18765:8000 "$IMAGE"
+          trap 'docker stop fb-engine-api-smoke >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:18765/healthz | grep -q '"version":"1.3.1"'; then
+              echo "Real-container API startup and public health route OK"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::API did not start or healthz was unhealthy."
+          docker logs --tail 80 fb-engine-api-smoke || true
+          exit 1
       - name: Trigger Coolify after a successful image publish (optional)
         if: ${{ success() }}
         env:

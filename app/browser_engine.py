@@ -247,7 +247,7 @@ def scrape_with_browser(url, comment_limit, reactor_limit, cookies_file):
                 return
 
         with sync_playwright() as pw:
-            browser=pw.chromium.launch(headless=False,args=[
+            browser=pw.chromium.launch(headless=True,args=[
                 '--disable-dev-shm-usage','--disable-background-networking',
                 '--disable-extensions','--no-first-run','--disable-gpu'])
             try:
