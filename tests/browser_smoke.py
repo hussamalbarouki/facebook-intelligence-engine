@@ -4,6 +4,7 @@ Uses synthetic data: it verifies actual JS locators and comment permalink
 extraction in the real installed browser, without any Facebook credentials.
 """
 from playwright.sync_api import sync_playwright
+from app.read_only_v2 import READ_COMMENTS_JS,UI_SIGNALS_JS,_read_only_open
 from app.browser_engine import (_DOM_COMMENT_JS, _safe_page_signals,
                                 _visible_comment_entry_buttons, _scroll_visible_dialog,
                                 _browser_page_classification)
@@ -61,6 +62,31 @@ with sync_playwright() as p:
           </div>""",wait_until='domcontentloaded')
         assert _scroll_visible_dialog(page)
         assert page.locator('#pane').evaluate('(el)=>el.scrollTop')>0
+        # Replica of the VERIFIED French reel flow, not an invented
+        # English group-post control. The Like button must not be touched.
+        page.set_content("""<html lang="fr"><body>
+          <button id="like" onclick="this.dataset.toggled='yes'">J'aime</button>
+          <button id="comment" onclick="document.querySelector('#drawer').hidden=false">Commenter</button>
+          <section id="drawer" hidden>
+            <div role="article">
+              <a href="https://www.facebook.com/profile.php?id=100023993619471">عبدالله صالح</a>
+              <span dir="auto">اختبار تعليق वास्तविक اردو</span>
+              <a href="https://www.facebook.com/reel/1418347453748116/?comment_id=2319889195441081">Mardi</a>
+            </div>
+          </section>
+        </body></html>""",wait_until="domcontentloaded")
+        selfcheck=page.locator('#like').get_attribute('data-toggled')
+        assert _read_only_open(page,True)=='Commenter'
+        assert page.locator('#drawer').is_visible()
+        assert page.locator('#like').get_attribute('data-toggled')==selfcheck
+        reel=page.evaluate(READ_COMMENTS_JS)
+        assert len(reel)==1,reel
+        assert reel[0]['name']=="عبدالله صالح",reel
+        assert reel[0]['id']=="2319889195441081",reel
+        assert reel[0]['text']=="اختبار تعليق वास्तविक اردو",reel
+        sig=page.evaluate(UI_SIGNALS_JS)
+        assert sig['visible_comment_links']==1,sig
+        print('V2 French Reel comments, Unicode extraction and Like safety smoke OK')
         print('Real Chromium DOM comment extraction, controls and scroll smoke OK')
     finally:
         browser.close()

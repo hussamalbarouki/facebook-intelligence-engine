@@ -16,7 +16,7 @@ from .facebook_session import probe_cookie_file, probe_post_access
 from .secrets import CookieVault
 from .storage import JobStore
 
-VERSION='1.3.3'
+VERSION='2.0.0'
 log=logging.getLogger('fb-engine')
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 
@@ -106,12 +106,12 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
 
     @app.get('/v1/capabilities',dependencies=[Depends(authorize)])
     def capabilities():
-        return {'version':VERSION,'adapter':'playwright-browser-observation + graphql-legacy + html-legacy','supports':['session_diagnostics','posts','comments','comment_replies','reactors','reaction_types','cookie_management','jobs','pagination'],
+        return {'version':VERSION,'adapter':'read-only-v2-playwright-engine','supports':['session_diagnostics','posts','comments','comment_replies','reactors','reaction_types','cookie_management','jobs','pagination'],
                 'limits':{'comments':1000,'reactors':1000},'known_limitations':['Facebook may require cookies or block scraping','Reaction lists may be partial','No live Facebook extraction test is performed in CI','Accessible sessions do not guarantee all posts are readable','Playwright browser results are partial and capped at 100 interactions per kind per attempt','Browser fallback can be disabled with FB_BROWSER_ENABLED=0']}
 
     @app.get('/v1/status',dependencies=[Depends(authorize)])
     def status():
-        return {'ok':True,'version':VERSION,'adapter':'playwright-browser-observation + graphql-legacy + html-legacy',
+        return {'ok':True,'version':VERSION,'adapter':'read-only-v2-playwright-engine',
                 'cookies':vault.status(),'settings':store.settings(),'queue':store.metrics()}
 
     @app.get('/v1/settings',dependencies=[Depends(authorize)])
@@ -192,7 +192,7 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
                 if not cookie_path:
                     raise HTTPException(status_code=409,detail='Facebook cookies not configured')
                 from .engine import resolve_share_link
-                from .browser_engine import scrape_with_browser
+                from .read_only_v2 import run as scrape_with_browser
                 url=row['url']
                 if is_share_link(url):
                     url,_=resolve_share_link(url,cookie_path)

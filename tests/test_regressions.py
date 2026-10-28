@@ -10,6 +10,12 @@ from app.engine import (
 URL='https://www.facebook.com/NASA/posts/1234567890'
 
 class AdapterRegressions(unittest.TestCase):
+    def setUp(self):
+        import os
+        self._legacy=patch.dict(os.environ,{'FB_ENGINE':'legacy'})
+        self._legacy.start()
+        self.addCleanup(self._legacy.stop)
+
     def test_reference_parsing(self):
         self.assertEqual(parse_post_reference(URL),('id','1234567890'))
         self.assertEqual(parse_post_reference('https://www.facebook.com/story.php?story_fbid=9876543210&id=111111111'),('id','9876543210'))

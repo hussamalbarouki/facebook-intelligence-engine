@@ -1,3 +1,11 @@
+# Facebook Intelligence Engine v2.0.0
+
+**Current production engine:** independent read-only Playwright engine with multilingual comment navigation and parser. The previous GraphQL/HTML adapters are only used when FB_ENGINE=legacy is explicitly selected.
+
+Read [V2 engine architecture, languages, tests and deployment](docs/ENGINE_READ_ONLY_V2.md).
+
+---
+
 undefined
 ## v1.3.1 — runtime reliability fix
 

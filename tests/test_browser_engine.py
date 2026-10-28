@@ -140,6 +140,11 @@ class BrowserParsingTests(unittest.TestCase):
         self.assertEqual(reactors,[])
 
 class HybridPipelineTests(unittest.TestCase):
+    def setUp(self):
+        self._legacy=patch.dict(os.environ,{'FB_ENGINE':'legacy'})
+        self._legacy.start()
+        self.addCleanup(self._legacy.stop)
+
     def _good(self):
         return {
             'post':{'id':None,'url':URL,'counts':{'comments':None,'likes':None}},

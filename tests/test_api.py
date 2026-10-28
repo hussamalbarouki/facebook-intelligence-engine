@@ -84,7 +84,7 @@ class ApiTest(unittest.TestCase):
                 'comment_shape_nodes':2,'comment_containers':4,'reactor_containers':1,
                 'comments_extracted':0,'reactors_extracted':0,
                 'rendered':{'comment_permalink_links':0}}
-        with patch('app.browser_engine.scrape_with_browser',return_value=report) as browser:
+        with patch('app.read_only_v2.run',return_value=report) as browser:
             response=self.req('POST',f"/v1/jobs/{jid}/browser-diagnostics")
         self.assertEqual(response.status_code,200,response.text)
         value=response.json()

@@ -404,6 +404,28 @@ def _has_requested_interactions(result, comments, reactors):
 
 
 def scrape_post(url, comment_limit, reactor_limit, cookies_file=None):
+    """V2 complete Playwright engine by default; legacy can be explicitly restored."""
+    if os.getenv('FB_ENGINE','read_only_v2').strip().lower()!='legacy':
+        validate_facebook_url(url)
+        if not cookies_file:
+            raise ExtractionError('FACEBOOK_COOKIES_REQUIRED')
+        normalized=url
+        if is_share_link(url):
+            normalized,_=resolve_share_link(url,cookies_file)
+        from .read_only_v2 import run
+        try:
+            return run(normalized,comment_limit,reactor_limit,cookies_file)
+        except RuntimeError as exc:
+            code=str(exc)
+            allowed={'BROWSER_DISABLED','BROWSER_RESOURCE_BUSY',
+                     'BROWSER_NO_VERIFIABLE_INTERACTIONS','FACEBOOK_LOGIN_REQUIRED',
+                     'FACEBOOK_COOKIES_REQUIRED','FACEBOOK_URL_INVALID',
+                     'FACEBOOK_LEFT_DOMAIN'}
+            raise ExtractionError(code if code in allowed else 'BROWSER_EXTRACTION_UNAVAILABLE') from None
+        except Exception as exc:
+            log.warning('V2 extraction failure: %s',type(exc).__name__)
+            raise ExtractionError('BROWSER_EXTRACTION_UNAVAILABLE') from None
+
     """Prefer GraphQL with cookies; use legacy HTML only as a fallback.
 
     All-empty unreadable results fail with an explicit error instead of being
