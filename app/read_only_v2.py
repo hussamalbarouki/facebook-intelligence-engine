@@ -21,11 +21,12 @@ from typing import Any
 
 log=logging.getLogger('fb-engine.v2')
 LOCK=threading.Lock()
-COMMENT_CAP=100
-REACTOR_CAP=100
-RESPONSE_CAP=64
+# Hard resource limits are explicit and independently reported in coverage.
+COMMENT_CAP=500
+REACTOR_CAP=300
+RESPONSE_CAP=160
 BODY_CAP=1_500_000
-TIME_CAP=65
+TIME_CAP=150
 
 # Structural identifiers are locale-independent. Text labels below are only
 # for opening visible comment panels / loading more, never for extracting data.
@@ -193,7 +194,8 @@ def _text(raw):
     return raw[:25000].strip() if isinstance(raw,str) and raw.strip() else None
 
 def _capture_graphql(raw, comments:dict,reactors:dict,limits):
-    counts={'documents':0,'comment_shapes':0,'reaction_shapes':0,'graphql_errors':0}
+    counts={'documents':0,'comment_shapes':0,'reaction_shapes':0,
+            'graphql_errors':0,'page_cursors':0,'has_next_page':0}
     stack=_json_docs(raw);counts['documents']=len(stack);limit=0
     while stack and limit<10000:
         item,parent=stack.pop() if isinstance(stack[-1],tuple) else (stack.pop(),'')
@@ -202,6 +204,12 @@ def _capture_graphql(raw, comments:dict,reactors:dict,limits):
             stack.extend((x,parent) for x in item[:300] if isinstance(x,(list,dict)))
         elif isinstance(item,dict):
             if item.get('errors'):counts['graphql_errors']+=1
+            info=item.get('page_info') or item.get('pageInfo')
+            if isinstance(info,dict) and 'comment' in parent.lower():
+                if isinstance(info.get('end_cursor') or info.get('endCursor'),str):
+                    counts['page_cursors']+=1
+                if info.get('has_next_page') is True or info.get('hasNextPage') is True:
+                    counts['has_next_page']+=1
             typ=str(item.get('__typename') or '')
             author=item.get('author') or item.get('commenter')
             body=_text(item.get('body') or item.get('message') or item.get('text'))
@@ -362,11 +370,17 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
         comments,reactors={},{}
         stats={'adapter':'read_only_v2','observed_graphql':0,'parsed_documents':0,
                'comment_shapes':0,'reaction_shapes':0,'graphql_errors':0,
+               'page_cursors':0,'has_next_page':0,
                'comment_opened':False,'comment_entry_label_language_independent':True,
                'ui_before':{},'ui_after':{},'ui_final':{},
                'comments_extracted':0,'reactors_extracted':0,'status':'running',
                'cookie_scope':{'c_user_for_target':False,'xs_for_target':False},
-               'navigation':'not_started','login_classification':'not_checked'}
+               'navigation':'not_started','login_classification':'not_checked',
+               'comment_pagination':{'attempted':0,'successful_expansion_clicks':0,
+                   'scroll_moves':0,'stalled_passes':0,'last_visible_ids':0,
+                   'stop_reason':'not_started'},
+               'reactor_pagination':{'attempted':False,'dialog_opened':False,
+                   'verified_names':0,'stop_reason':'not_started'}}
         begin=time.monotonic()
         def on_response(response):
             if time.monotonic()-begin>TIME_CAP or stats['observed_graphql']>=RESPONSE_CAP:return
@@ -452,23 +466,99 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                     # Do not return UI text; may be user-generated.
                     page.wait_for_timeout(900)
                 stats['ui_after']=page.evaluate(UI_SIGNALS_JS)
-                for _ in range(8):
-                    if time.monotonic()-begin>TIME_CAP:break
-                    try:
-                        for c in page.evaluate(READ_COMMENTS_JS) or []:
-                            if not isinstance(c,dict):continue
-                            ident=c.get('id')
-                            if not (isinstance(ident,str) and re.fullmatch(r'\d{5,30}',ident)):continue
-                            if not c.get('name') or not c.get('text'):continue
-                            comments.setdefault(ident,{'id':ident,'name':c['name'],'text':c['text'],
-                              'profile_url':_clean_url(c.get('profile_url')),
-                              'url':_clean_url(c.get('url'),True),'time':None,'replies':[]})
-                    except Exception:pass
-                    if len(comments)>=maxc and len(reactors)>=maxr:break
-                    _read_only_open(page,False) if maxc and len(comments)<maxc else None
-                    if not _scroll_actual_panel(page):
-                        page.mouse.wheel(0,700)
-                    page.wait_for_timeout(450)
+                from .interaction_pagination import (
+                    MAX_SCROLL_PASSES, MAX_STALLED_PASSES, PANEL_SIGNATURE_JS,
+                    click_more_comments, scroll_comment_panel, click_reaction_list,
+                    extract_reaction_dialog, scroll_reaction_panel)
+                pagination=stats['comment_pagination']
+                if maxc:
+                    pagination['stop_reason']='in_progress'
+                    previous_count=-1
+                    stalled=0
+                    # Distinguish reading the initial Facebook batch from
+                    # successfully fetching additional unique comments.
+                    for attempt in range(MAX_SCROLL_PASSES):
+                        if time.monotonic()-begin>TIME_CAP:
+                            pagination['stop_reason']='time_budget_exhausted'
+                            break
+                        pagination['attempted']+=1
+                        try:
+                            for c in page.evaluate(READ_COMMENTS_JS) or []:
+                                if not isinstance(c,dict):continue
+                                ident=c.get('id')
+                                if not (isinstance(ident,str) and re.fullmatch(r'\d{5,30}',ident)):continue
+                                if not c.get('name') or not c.get('text'):continue
+                                if len(comments)>=maxc:break
+                                comments.setdefault(ident,{'id':ident,'name':c['name'],'text':c['text'],
+                                    'profile_url':_clean_url(c.get('profile_url')),
+                                    'url':_clean_url(c.get('url'),True),'time':None,'replies':[]})
+                            visible=page.evaluate(PANEL_SIGNATURE_JS)
+                            pagination['last_visible_ids']=visible.get('unique_visible_ids',0)
+                        except Exception as exc:
+                            log.info('Comment batch read unavailable: %s',type(exc).__name__)
+                        if len(comments)>=maxc:
+                            pagination['stop_reason']='requested_or_hard_limit_reached'
+                            break
+                        total=len(comments)
+                        if total>previous_count:
+                            stalled=0
+                            previous_count=total
+                        else:
+                            stalled+=1
+                        pagination['stalled_passes']=stalled
+                        if stalled>=MAX_STALLED_PASSES:
+                            pagination['stop_reason']='no_new_comments_after_retries'
+                            break
+                        expanded=click_more_comments(page)
+                        if expanded:
+                            pagination['successful_expansion_clicks']+=1
+                        motion=scroll_comment_panel(page)
+                        if motion.get('scrolled') or motion.get('wheel_requested'):
+                            pagination['scroll_moves']+=1
+                        page.wait_for_timeout(950 if expanded else 720)
+                    else:
+                        pagination['stop_reason']='scroll_pass_limit_reached'
+                else:
+                    pagination['stop_reason']='comments_not_requested'
+
+                reactor_diag=stats['reactor_pagination']
+                if maxr:
+                    reactor_diag['attempted']=True
+                    if len(reactors)>=maxr:
+                        reactor_diag['stop_reason']='requested_or_hard_limit_reached'
+                    elif time.monotonic()-begin>TIME_CAP:
+                        reactor_diag['stop_reason']='time_budget_exhausted'
+                    else:
+                        # Read-only UI controls only; never click Like/React.
+                        reactor_diag['dialog_opened']=click_reaction_list(page)
+                        if reactor_diag['dialog_opened']:
+                            page.wait_for_timeout(900)
+                            reactor_last=-1
+                            stalled=0
+                            for _ in range(35):
+                                if time.monotonic()-begin>TIME_CAP:break
+                                info=extract_reaction_dialog(page,reactors,maxr)
+                                reactor_diag['verified_names']=len(reactors)
+                                reactor_diag['recognized_dialogs']=info.get('recognized_dialogs',0)
+                                if len(reactors)>=maxr:
+                                    reactor_diag['stop_reason']='requested_or_hard_limit_reached'
+                                    break
+                                if len(reactors)==reactor_last:
+                                    stalled+=1
+                                else:
+                                    stalled=0
+                                    reactor_last=len(reactors)
+                                if stalled>=5:
+                                    reactor_diag['stop_reason']='no_new_reactors_after_retries'
+                                    break
+                                scroll_reaction_panel(page)
+                                page.wait_for_timeout(730)
+                            if reactor_diag['stop_reason']=='not_started':
+                                reactor_diag['stop_reason']='reaction_scroll_limit_reached'
+                        else:
+                            reactor_diag['stop_reason']='no_verified_reactor_list_control'
+                else:
+                    reactor_diag['stop_reason']='reactors_not_requested'
                 stats['ui_final']=page.evaluate(UI_SIGNALS_JS)
                 stats['comments_extracted']=len(comments)
                 stats['reactors_extracted']=len(reactors)
@@ -495,9 +585,10 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                 if browser is not None:
                     try:browser.close()
                     except Exception:pass
-        log.info('V2 read-only result: kind=%s comments=%d reactors=%d gql=%d opened=%s status=%s',
-                 stats.get('page_kind'),len(comments),len(reactors),stats['observed_graphql'],
-                 stats['comment_opened'],stats['status'])
+        log.info('V2 result: kind=%s comments=%d/%d reactors=%d/%d gql=%d opened=%s pagination=%s reactions=%s status=%s',
+                 stats.get('page_kind'),len(comments),maxc,len(reactors),maxr,stats['observed_graphql'],
+                 stats['comment_opened'],stats['comment_pagination']['stop_reason'],
+                 stats['reactor_pagination']['stop_reason'],stats['status'])
         if diagnostic_only:return stats
         if not comments and not reactors:
             if stats['status']=='facebook_login_overlay_visible':
@@ -508,11 +599,18 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                     'counts':{'comments':None,'likes':None,'shares':None,'reactions_by_type':{}}},
             'comments':list(comments.values())[:maxc],
             'reactors':list(reactors.values())[:maxr],
-            'coverage':{'comments_requested':maxc,'reactors_requested':maxr,
+            'coverage':{'comments_requested':int(comment_limit),
+                        'reactors_requested':int(reactor_limit),
+                        'comments_effective_limit':maxc,'reactors_effective_limit':maxr,
                         'comments_returned':min(len(comments),maxc),
                         'reactors_returned':min(len(reactors),maxr),
+                        'comments_stop_reason':stats['comment_pagination']['stop_reason'],
+                        'reactors_stop_reason':stats['reactor_pagination']['stop_reason'],
+                        'comment_scroll_passes':stats['comment_pagination']['attempted'],
+                        'comment_expansion_clicks':stats['comment_pagination']['successful_expansion_clicks'],
+                        'reactions_list_opened':stats['reactor_pagination']['dialog_opened'],
                         'complete':False,'adapter':'read_only_v2',
-                        'note':'Only verifiable visible or received records; individual reactor lists may be unavailable.'}
+                        'note':'Only verifiable visible or received records. Counts and names depend on Facebook availability.'}
         }
     finally:
         LOCK.release()

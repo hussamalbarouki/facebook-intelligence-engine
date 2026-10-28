@@ -1,4 +1,14 @@
-# Facebook Intelligence Engine v2.1.1
+# Latest extraction improvements: v2.2.0
+
+- The first 20 Facebook comments are only the initial batch, not proof that the full thread has loaded. The new independent pagination helper scrolls the actual comments pane, clicks only read-only Load more / View replies actions, and collects unique IDs across up to 80 bounded passes. It monitors progress and stops clearly rather than declaring completion.
+- A guarded reaction-list reader opens only explicit read-only 'See who reacted' / reaction-count controls; it never clicks Like or any toggle with aria-pressed. Reaction usernames are returned only when the list is actually accessible.
+- **Check the job requested limit.** If your PHP dashboard submits `comments_limit: 20`, the engine will correctly stop at 20 even when more are visible. To test larger pulls, submit `comments_limit: 200` (or more up to the documented caps).
+- Internal hard caps: 500 comments, 300 reactors per attempt; actual coverage depends on Facebook. Results include stop reasons, effective limits, scroll passes and whether a list of reactors was accessible.
+- CI includes a real Chromium synthetic infinite-scroll case that starts with 20 and verifies that at least 60 different comments and reaction identities are found, without clicking Like. This is not a live Facebook authenticated test; that still requires a successful job with your Coolify profile.
+
+---
+
+# Facebook Intelligence Engine v2.2.0
 
 **Current production engine:** independent read-only Playwright engine with persistent human-signed-in Chrome profile, multilingual comment navigation and parser. The previous GraphQL/HTML adapters are only used when FB_ENGINE=legacy is explicitly selected.
 

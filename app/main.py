@@ -18,7 +18,7 @@ from .storage import JobStore
 from .browser_login import LoginSession,profile_ready
 from .browser_login_routes import install as install_browser_login
 
-VERSION='2.1.1'
+VERSION='2.2.0'
 log=logging.getLogger('fb-engine')
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 
@@ -125,7 +125,11 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
     @app.get('/v1/capabilities',dependencies=[Depends(authorize)])
     def capabilities():
         return {'version':VERSION,'adapter':'read-only-v2-playwright-engine','supports':['session_diagnostics','posts','comments','comment_replies','reactors','reaction_types','cookie_management','jobs','pagination'],
-                'limits':{'comments':1000,'reactors':1000},'known_limitations':['Facebook may require cookies or block scraping','Reaction lists may be partial','No live Facebook extraction test is performed in CI','Accessible sessions do not guarantee all posts are readable','Playwright browser results are partial and capped at 100 interactions per kind per attempt','Browser fallback can be disabled with FB_BROWSER_ENABLED=0']}
+                'limits':{'comments_per_request':1000,'reactors_per_request':1000,
+                           'comments_per_attempt_hard_cap':500,'reactors_per_attempt_hard_cap':300},'known_limitations':['Facebook may require cookies or block scraping','Reaction lists may be partial','No live Facebook extraction test is performed in CI','Accessible sessions do not guarantee all posts are readable','Read-only extraction is bounded at 500 comments / 300 reactors per attempt',
+                  'Reactors require verifiable identities in available GraphQL or an explicit safe reaction-list dialog',
+                  'More comments require Facebook to actually serve additional batches',
+                  'If the caller submits comments_limit=20, extraction intentionally stops at 20','Browser fallback can be disabled with FB_BROWSER_ENABLED=0']}
 
     @app.get('/v1/status',dependencies=[Depends(authorize)])
     def status():

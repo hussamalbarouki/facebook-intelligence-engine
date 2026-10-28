@@ -4,6 +4,7 @@ php
 docs
 tests/*
 !tests/browser_smoke.py
+!tests/pagination_smoke.py
 !tests/profile_smoke.py
 *.zip
 .env

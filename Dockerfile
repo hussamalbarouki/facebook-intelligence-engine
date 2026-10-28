@@ -21,6 +21,7 @@ RUN python -m playwright install --with-deps chromium && chmod -R a+rX /opt/pw-b
 
 COPY app ./app
 COPY tests/browser_smoke.py ./browser_smoke.py
+COPY tests/pagination_smoke.py ./pagination_smoke.py
 COPY tests/profile_smoke.py ./profile_smoke.py
 COPY entrypoint.sh ./entrypoint.sh
 RUN chmod +x ./entrypoint.sh \
@@ -31,6 +32,7 @@ USER engine
 RUN python -c 'import os; assert all(os.access(p,os.W_OK) for p in (os.environ["HOME"],os.environ["XDG_CONFIG_HOME"],os.environ["XDG_CACHE_HOME"])); print("Chromium writable user paths OK")' \
     && python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True,args=["--disable-dev-shm-usage"]); page=b.new_page(); page.goto("data:text/html,<h1>browser-ready</h1>"); assert page.locator("h1").inner_text()=="browser-ready"; b.close(); p.stop(); print("headless Chromium smoke test OK")'
 RUN python browser_smoke.py
+RUN python pagination_smoke.py
 # Reopens a real persistent Chromium profile after a complete process exit.
 # This smoke test uses fake test cookies and never logs into Facebook.
 RUN xvfb-run -a -s "-screen 0 1365x910x24" python profile_smoke.py
