@@ -5,6 +5,8 @@ extraction in the real installed browser, without any Facebook credentials.
 """
 from playwright.sync_api import sync_playwright
 from app.read_only_v2 import READ_COMMENTS_JS,UI_SIGNALS_JS,_read_only_open,_assess_login
+from app.interaction_pagination import (SCROLL_JS,REACTION_SCROLL_JS,REACTION_DOM_JS,
+                                        select_all_comments,select_all_reactions)
 from app.browser_engine import (_DOM_COMMENT_JS, _safe_page_signals,
                                 _visible_comment_entry_buttons, _scroll_visible_dialog,
                                 _browser_page_classification)
@@ -103,6 +105,46 @@ with sync_playwright() as p:
         assert page.locator('#like').get_attribute('data-liked') is None
         page.locator('form').evaluate('(f)=>f.style.display="none"')
         assert not page.evaluate(UI_SIGNALS_JS)['login_fields']
+        # Real browser regression: an already-bottomed first pane must not
+        # prevent scrolling another pane containing the comment list.
+        page.set_content("""<html><body><div role="dialog">
+          <div id="stale" style="height:100px;overflow-y:auto;width:300px">
+            <div style="height:500px"><a href="https://www.facebook.com/reel/123?comment_id=12345678">Old</a></div>
+          </div>
+          <div id="real" style="height:120px;overflow-y:auto;width:300px">
+            <div style="height:1100px"><a href="https://www.facebook.com/reel/123?comment_id=23456789">Current</a></div>
+          </div>
+        </div></body></html>""")
+        page.locator('#stale').evaluate('(el)=>el.scrollTop=el.scrollHeight')
+        moved=page.evaluate(SCROLL_JS)
+        assert moved['scrolled'] and page.locator('#real').evaluate('(el)=>el.scrollTop')>0,moved
+        # Sort control is read-only and must select All Comments only when
+        # Facebook actually exposes this option.
+        page.set_content("""<button id="sort" onclick="document.querySelector('#all').hidden=false">Most relevant</button>
+           <button id="all" hidden onclick="this.dataset.selected='yes'">All comments</button>""")
+        assert select_all_comments(page)
+        assert page.locator('#all').get_attribute('data-selected')=='yes'
+        # Reaction list contains role=tab labels, a valid person link and
+        # nested scrollable panes. Click only the All tab, never Like.
+        page.set_content("""<div role="dialog" aria-label="Reactions">
+          <div role="tablist"><button role="tab" id="like" aria-selected="true">Like</button>
+          <button role="tab" id="all" aria-selected="false"
+            onclick="this.setAttribute('aria-selected','true')">All</button></div>
+          <div id="reaction-stale" style="height:100px;overflow-y:auto;width:300px">
+            <div style="height:500px"><a href="https://www.facebook.com/profile.php?id=100001">First Person</a></div>
+          </div>
+          <div id="reaction-real" style="height:120px;overflow-y:auto;width:300px">
+            <div style="height:1100px"><a href="https://www.facebook.com/profile.php?id=100002">Second Person</a></div>
+          </div>
+        </div>""")
+        page.locator('#reaction-stale').evaluate('(el)=>el.scrollTop=el.scrollHeight')
+        assert select_all_reactions(page)
+        assert page.locator('#all').get_attribute('aria-selected')=='true'
+        react=page.evaluate(REACTION_DOM_JS)
+        assert react['recognized_dialogs']==1 and len(react['profiles'])==2,react
+        moved=page.evaluate(REACTION_SCROLL_JS)
+        assert moved['scrolled'] and page.locator('#reaction-real').evaluate('(el)=>el.scrollTop')>0,moved
+        print('V2 nested comment/reaction pagination and All tabs smoke OK')
         print('V2 login-overlay classification and read-only control smoke OK')
         print('V2 French Reel comments, Unicode extraction and Like safety smoke OK')
         print('Real Chromium DOM comment extraction, controls and scroll smoke OK')

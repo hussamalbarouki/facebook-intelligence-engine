@@ -18,7 +18,7 @@ from .storage import JobStore
 from .browser_login import LoginSession,profile_ready
 from .browser_login_routes import install as install_browser_login
 
-VERSION='2.2.0'
+VERSION='2.2.1'
 log=logging.getLogger('fb-engine')
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 

@@ -1,3 +1,35 @@
+# Pagination and reaction improvements: v2.2.1
+
+This release addresses a real incomplete export: on the Reel
+`https://www.facebook.com/reel/3181543935372005/`, the client requested
+100 comments and 100 reactors but extracted 20 and 2.
+
+New evidence-driven pagination:
+- A comment panel may contain multiple scrollable panes; the reader tries
+  multiple eligible panels instead of repeatedly targeting the first.
+- If Facebook offers the `Most relevant` filter, select the explicit
+  `All comments` option (including international-language equivalents).
+- More conservative stop reasoning differentiates an exhausted pane from
+  responses that arrived without recognizable comment records; results remain
+  `complete:false` unless completeness can actually be proven.
+- Reaction list scrolling follows visible profile links and handles nested
+  scrollable sections rather than scrolling the header/first pane forever.
+- Explicit `All` reaction tab is selected when available; no Like, Follow,
+  Comment, Send or Reply action is used.
+- The output includes additional coverage evidence:
+  `comment_all_comments_selected`, `reaction_all_tab_selected`,
+  `reaction_scroll_moves`, and `reaction_dialogs_recognized`.
+
+Evidence limits:
+- A requested limit of 100 is not evidence that Facebook makes 100 unique
+  comments or reactor identities available. The 20/2 export is demonstrably
+  partial; the source does not provide a reliable total count.
+- If Facebook withholds deeper pages or a reaction identity, do not fabricate
+  missing users and never mark an incomplete result complete.
+- The authenticated session and exact production Facebook markup must still
+  be tested on Coolify. The Docker smoke tests use synthesized browser DOM
+  and confirm only the behavior of our code, not Facebook data coverage.
+
 # Latest extraction improvements: v2.2.0
 
 - The first 20 Facebook comments are only the initial batch, not proof that the full thread has loaded. The new independent pagination helper scrolls the actual comments pane, clicks only read-only Load more / View replies actions, and collects unique IDs across up to 80 bounded passes. It monitors progress and stops clearly rather than declaring completion.

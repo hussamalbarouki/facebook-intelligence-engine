@@ -378,9 +378,12 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                'navigation':'not_started','login_classification':'not_checked',
                'comment_pagination':{'attempted':0,'successful_expansion_clicks':0,
                    'scroll_moves':0,'stalled_passes':0,'last_visible_ids':0,
+                   'all_comments_selected':False,'last_panel_at_end':False,
                    'stop_reason':'not_started'},
                'reactor_pagination':{'attempted':False,'dialog_opened':False,
-                   'verified_names':0,'stop_reason':'not_started'}}
+                   'verified_names':0,'scroll_moves':0,'stalled_passes':0,
+                   'recognized_dialogs':0,'all_reactions_selected':False,
+                   'stop_reason':'not_started'}}
         begin=time.monotonic()
         def on_response(response):
             if time.monotonic()-begin>TIME_CAP or stats['observed_graphql']>=RESPONSE_CAP:return
@@ -469,12 +472,19 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                 from .interaction_pagination import (
                     MAX_SCROLL_PASSES, MAX_STALLED_PASSES, PANEL_SIGNATURE_JS,
                     click_more_comments, scroll_comment_panel, click_reaction_list,
-                    extract_reaction_dialog, scroll_reaction_panel)
+                    extract_reaction_dialog, scroll_reaction_panel, select_all_comments,
+                    select_all_reactions)
                 pagination=stats['comment_pagination']
+                if maxc and stats['comment_opened']:
+                    pagination['all_comments_selected']=select_all_comments(page)
+                    if pagination['all_comments_selected']:
+                        page.wait_for_timeout(750)
                 if maxc:
                     pagination['stop_reason']='in_progress'
                     previous_count=-1
                     stalled=0
+                    last_network=stats['observed_graphql']
+                    last_ui_motion=False
                     # Distinguish reading the initial Facebook batch from
                     # successfully fetching additional unique comments.
                     for attempt in range(MAX_SCROLL_PASSES):
@@ -506,8 +516,15 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                         else:
                             stalled+=1
                         pagination['stalled_passes']=stalled
+                        # Reaching a fixed stall count is not proof that
+                        # Facebook has no further comments. Distinguish a
+                        # non-moving pane from repeated but unproductive
+                        # pagination and leave the outcome partial either way.
                         if stalled>=MAX_STALLED_PASSES:
-                            pagination['stop_reason']='no_new_comments_after_retries'
+                            pagination['stop_reason']=(
+                                'visible_pages_stalled_with_new_network_data'
+                                if stats['observed_graphql']>last_network
+                                else 'no_new_comments_after_exhaustive_scroll')
                             break
                         expanded=click_more_comments(page)
                         if expanded:
@@ -515,7 +532,15 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                         motion=scroll_comment_panel(page)
                         if motion.get('scrolled') or motion.get('wheel_requested'):
                             pagination['scroll_moves']+=1
-                        page.wait_for_timeout(950 if expanded else 720)
+                        pagination['last_panel_at_end']=bool(motion.get('at_end',False))
+                        last_ui_motion=bool(expanded or motion.get('scrolled'))
+                        if (stalled>=4 and not last_ui_motion and
+                                stats['observed_graphql']==last_network
+                                and motion.get('at_end')):
+                            pagination['stop_reason']='scroll_panel_at_end_no_new_network_data'
+                            break
+                        last_network=stats['observed_graphql']
+                        page.wait_for_timeout(1100 if expanded or motion.get('scrolled') else 900)
                     else:
                         pagination['stop_reason']='scroll_pass_limit_reached'
                 else:
@@ -533,9 +558,13 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                         reactor_diag['dialog_opened']=click_reaction_list(page)
                         if reactor_diag['dialog_opened']:
                             page.wait_for_timeout(900)
+                            reactor_diag['all_reactions_selected']=select_all_reactions(page)
+                            if reactor_diag['all_reactions_selected']:
+                                page.wait_for_timeout(750)
                             reactor_last=-1
                             stalled=0
-                            for _ in range(35):
+                            last_reactor_network=stats['observed_graphql']
+                            for _ in range(55):
                                 if time.monotonic()-begin>TIME_CAP:break
                                 info=extract_reaction_dialog(page,reactors,maxr)
                                 reactor_diag['verified_names']=len(reactors)
@@ -548,11 +577,23 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                                 else:
                                     stalled=0
                                     reactor_last=len(reactors)
-                                if stalled>=5:
-                                    reactor_diag['stop_reason']='no_new_reactors_after_retries'
+                                reactor_diag['stalled_passes']=stalled
+                                if stalled>=12:
+                                    reactor_diag['stop_reason']=(
+                                        'visible_reaction_pages_stalled'
+                                        if stats['observed_graphql']>last_reactor_network
+                                        else 'no_new_reactors_after_exhaustive_scroll')
                                     break
-                                scroll_reaction_panel(page)
-                                page.wait_for_timeout(730)
+                                moved=scroll_reaction_panel(page)
+                                if moved.get('scrolled') or moved.get('wheel_requested'):
+                                    reactor_diag['scroll_moves']+=1
+                                if (stalled>=4 and moved.get('at_end')
+                                        and not moved.get('scrolled')
+                                        and stats['observed_graphql']==last_reactor_network):
+                                    reactor_diag['stop_reason']='reaction_panel_at_end'
+                                    break
+                                last_reactor_network=stats['observed_graphql']
+                                page.wait_for_timeout(920 if moved.get('scrolled') else 780)
                             if reactor_diag['stop_reason']=='not_started':
                                 reactor_diag['stop_reason']='reaction_scroll_limit_reached'
                         else:
@@ -608,6 +649,10 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                         'reactors_stop_reason':stats['reactor_pagination']['stop_reason'],
                         'comment_scroll_passes':stats['comment_pagination']['attempted'],
                         'comment_expansion_clicks':stats['comment_pagination']['successful_expansion_clicks'],
+                        'comment_all_comments_selected':stats['comment_pagination']['all_comments_selected'],
+                        'reaction_scroll_moves':stats['reactor_pagination']['scroll_moves'],
+                        'reaction_dialogs_recognized':stats['reactor_pagination']['recognized_dialogs'],
+                        'reaction_all_tab_selected':stats['reactor_pagination']['all_reactions_selected'],
                         'reactions_list_opened':stats['reactor_pagination']['dialog_opened'],
                         'complete':False,'adapter':'read_only_v2',
                         'note':'Only verifiable visible or received records. Counts and names depend on Facebook availability.'}

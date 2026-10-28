@@ -10,7 +10,7 @@ import time
 from .read_only_v2 import MORE_TERMS, ACTION_DENY
 
 MAX_SCROLL_PASSES=80
-MAX_STALLED_PASSES=5
+MAX_STALLED_PASSES=10
 MORE_COUNT=re.compile(
     r'(?:view|see|show|load)\s+(?:(?:all|the|more|another)\s+)?(?:\d+\s+)?'
     r'(?:more\s+)?(?:comments|replies)'
@@ -53,18 +53,24 @@ SCROLL_JS=r"""() => {
   const unique=[...new Set(candidates)];
   // Prefer the closest scrollable ancestor of a visible comment. This avoids
   // scrolling the feed/reel carousel instead of the comments drawer.
-  const target=unique[0]||null;
-  if(!target)return {scrolled:false,reason:'no_scrollable_comment_panel',
+  if(!unique.length)return {scrolled:false,reason:'no_scrollable_comment_panel',
     visible_comments:anchors.length,scrollable_panels:0};
-  const before=target.scrollTop,limit=target.scrollHeight-target.clientHeight;
-  target.scrollBy({top:Math.min(1100,Math.max(600,target.clientHeight*.85)),behavior:'instant'});
-  const after=target.scrollTop;
-  const rect=target.getBoundingClientRect();
-  return {scrolled:after>before+2,before:Math.round(before),
-    after:Math.round(after),at_end:after>=limit-8,
-    visible_comments:anchors.length,scrollable_panels:unique.length,
-    center_x:Math.round(Math.max(2,Math.min(innerWidth-2,rect.left+rect.width/2))),
-    center_y:Math.round(Math.max(2,Math.min(innerHeight-2,rect.top+rect.height/2)))};
+  // React often nests scroll areas. Try candidates until one ACTUALLY MOVES.
+  // Choosing unique[0] repeatedly can stall on a small, already-ended panel.
+  let best=null;
+  for (const target of unique.slice(0,24)) {
+    const before=target.scrollTop,limit=target.scrollHeight-target.clientHeight;
+    target.scrollBy({top:Math.min(1100,Math.max(600,target.clientHeight*.85)),behavior:'instant'});
+    const after=target.scrollTop,rect=target.getBoundingClientRect();
+    const out={scrolled:after>before+2,before:Math.round(before),
+      after:Math.round(after),at_end:after>=limit-8,
+      visible_comments:anchors.length,scrollable_panels:unique.length,
+      center_x:Math.round(Math.max(2,Math.min(innerWidth-2,rect.left+rect.width/2))),
+      center_y:Math.round(Math.max(2,Math.min(innerHeight-2,rect.top+rect.height/2)))};
+    if(out.scrolled)return out;
+    if(!best || (!out.at_end && best.at_end))best=out;
+  }
+  return best || {scrolled:false,reason:'no_panel_progress',visible_comments:anchors.length};
 }"""
 
 PANEL_SIGNATURE_JS=r"""() => {
@@ -88,12 +94,14 @@ REACTION_DOM_JS=r"""() => {
   const panels=[...document.querySelectorAll('[role="dialog"]')].filter(d=>{
     const h=d.querySelector('[role="heading"],h1,h2,h3');
     const title=(d.getAttribute('aria-label')||'')+' '+(h?.textContent||'');
-    return tag.test(title);
+    const tabs=[...d.querySelectorAll('[role="tab"]')].map(t=>(t.getAttribute('aria-label')||t.textContent||'').trim().toLowerCase());
+    const hasReactions=tabs.filter(t=>/^(like|love|haha|wow|care|sad|angry|j'aime|me gusta|أعجبني|أحببته|पसंद|لائک)$/.test(t)).length>0;
+    return tag.test(title) || (tabs.length>=2 && hasReactions);
   });
   const out=[];
   for(const panel of panels.slice(0,3)){
     for(const a of [...panel.querySelectorAll('a[href]')].slice(0,200)){
-      const name=(a.innerText||'').trim();
+      const name=(a.innerText||a.getAttribute('aria-label')||'').trim();
       let u;try{u=new URL(a.href,location.href)}catch(_){continue}
       if(!name||name.length>160||!(u.hostname==='facebook.com'||u.hostname.endsWith('.facebook.com')))continue;
       if(u.searchParams.has('comment_id') || /\/(?:reel|videos|watch|posts)\//.test(u.pathname))continue;
@@ -155,22 +163,41 @@ REACTION_SCROLL_JS=r"""() => {
   const tag=/reactions?|reacted|likes|réactions|تفاعل|المتفاعلين|reaksi|reacciones|gefällt/i;
   for(const modal of document.querySelectorAll('[role="dialog"]')){
     const heading=modal.querySelector('[role="heading"],h1,h2,h3');
-    if(!tag.test((modal.getAttribute('aria-label')||'')+' '+(heading?.textContent||'')))continue;
-    const all=[modal,...modal.querySelectorAll('div')];
-    for(const element of all.slice(0,300)){
+    const title=(modal.getAttribute('aria-label')||'')+' '+(heading?.textContent||'');
+    const tabs=[...modal.querySelectorAll('[role="tab"]')].map(t=>(t.getAttribute('aria-label')||t.textContent||'').trim().toLowerCase());
+    const reactionTab=tabs.length>=2 && tabs.some(t=>/^(like|love|haha|wow|care|sad|angry|j'aime|me gusta|أعجبني|पसंद|لائک)$/.test(t));
+    if(!tag.test(title) && !reactionTab)continue;
+    // Prefer scrollable ancestors of profile links. Header/tab panes may be
+    // scrollable but do not load more people.
+    const links=[...modal.querySelectorAll('a[href]')].slice(0,120);
+    const candidates=[];
+    for(const link of links){
+      let node=link;
+      for(let depth=0;node&&depth<9;depth++,node=node.parentElement){
+        if(!modal.contains(node))break;
+        candidates.push(node);
+      }
+    }
+    candidates.push(modal,...[...modal.querySelectorAll('div')].slice(0,240));
+    let fallback=null;
+    for(const element of [...new Set(candidates)].slice(0,320)){
       const r=element.getBoundingClientRect(), css=getComputedStyle(element);
       if(r.height<40||r.width<100)continue;
       if(element.scrollHeight-element.clientHeight>70 &&
          /(scroll|auto|overlay)/.test(css.overflowY)){
         const before=element.scrollTop;
-        element.scrollBy(0,900);
-        return {scrolled:element.scrollTop>before+2,
+        element.scrollBy({top:900,behavior:'instant'});
+        const out={scrolled:element.scrollTop>before+2,
+                at_end:element.scrollTop>=element.scrollHeight-element.clientHeight-8,
                 center_x:Math.round(r.left+r.width/2),
                 center_y:Math.round(r.top+r.height/2)};
+        if(out.scrolled)return out;
+        if(!fallback || (!out.at_end && fallback.at_end))fallback=out;
       }
     }
+    if(fallback)return fallback;
   }
-  return {scrolled:false};
+  return {scrolled:false,reason:'no_moving_reaction_panel'};
 }"""
 
 def scroll_reaction_panel(page):
@@ -227,3 +254,79 @@ def extract_reaction_dialog(page,reactors,limit):
             reactors.setdefault(uri,{'name':name,'profile_url':uri,'type':'unknown'})
     return {'recognized_dialogs':data.get('recognized_dialogs',0),
             'names_added':len(reactors)}
+
+
+ALL_COMMENT_LABELS=(
+    'All comments','Tous les commentaires','جميع التعليقات','كل التعليقات',
+    'सभी टिप्पणियाँ','تمام تبصرے','সব মন্তব্য','सभी कमेंट',
+    'Todos los comentarios','Todos os comentários','Tutti i commenti',
+    'Alle Kommentare','Tüm yorumlar','Все комментарии','所有评论',
+    'すべてのコメント','모든 댓글','Semua komentar')
+SORT_OPTION_LABELS=(
+    'Most relevant','Relevant','Les plus pertinents','الأكثر صلة','الأكثر ملاءمة',
+    'सबसे प्रासंगिक','سب سے متعلقہ','Más relevantes','Mais relevantes',
+    'Più pertinenti','Relevanteste','En alakalı','Самые актуальные')
+
+def select_all_comments(page):
+    """Optional read-only Facebook sorting, without clicking post actions.
+
+    Only open an explicit relevance filter; only select an explicit All
+    Comments menu item. Never treats the comment composer as a filter.
+    """
+    import re
+    def exact_label(text):
+        return re.compile(r'^\s*'+re.escape(text)+r'\s*$',re.I)
+    for label in SORT_OPTION_LABELS:
+        for role in ('button','link'):
+            try:
+                target=page.get_by_role(role,name=exact_label(label))
+                if not target.count() or not target.first.is_visible():continue
+                if target.first.get_attribute('aria-pressed') is not None:continue
+                target.first.click(timeout=1200)
+                page.wait_for_timeout(250)
+                for choice in ALL_COMMENT_LABELS:
+                    for choice_role in ('menuitem','option','button','link'):
+                        item=page.get_by_role(choice_role,name=exact_label(choice))
+                        if not item.count() or not item.first.is_visible():continue
+                        if item.first.get_attribute('type')=='submit':continue
+                        item.first.click(timeout=1300)
+                        return True
+                # Do not click random items when sorting option is absent.
+                return False
+            except Exception:
+                continue
+    return False
+
+
+def select_all_reactions(page):
+    """Select the 'All' tab ONLY inside an identified reactions dialog."""
+    all_names=('All','Tout','Tous','الكل','सभी','سب','سبھی','Todos',
+               'Todas','Tutti','Alle','Все','全部','すべて','모두','Semua')
+    dialog=page.locator('[role="dialog"]')
+    for n in range(min(dialog.count(),4)):
+        try:
+            root=dialog.nth(n)
+            if not root.is_visible():continue
+            title=(root.get_attribute('aria-label') or '')
+            heading=root.locator('[role="heading"],h1,h2,h3')
+            if heading.count():
+                title+=' '+(heading.first.inner_text(timeout=500) or '')
+            tabs=root.locator('[role="tab"]')
+            labels=[(_candidate_label(tabs.nth(k)) or '').casefold()
+                    for k in range(min(tabs.count(),15))]
+            known_reactions={'like','love','haha','wow','care','sad','angry',
+                             "j'aime",'me gusta','أعجبني','पसंद','لائک'}
+            recognized=(bool(REACTION_DIALOG.search(title))
+                        or (len(labels)>=2 and any(t in known_reactions for t in labels)))
+            if not recognized:continue
+            for k in range(min(tabs.count(),15)):
+                button=tabs.nth(k)
+                if not button.is_visible():continue
+                if _candidate_label(button).casefold() not in {t.casefold() for t in all_names}:continue
+                if button.get_attribute('aria-selected')=='true':
+                    return True
+                button.click(timeout=1400)
+                return True
+        except Exception:
+            continue
+    return False
