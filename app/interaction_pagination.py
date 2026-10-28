@@ -35,8 +35,7 @@ REACTION_DIALOG=re.compile(
 SCROLL_JS=r"""() => {
   const visible = x => {let r=x.getBoundingClientRect();return r.width>3&&r.height>3
     &&r.bottom>0&&r.top<innerHeight};
-  const scrollable=x => {const st=getComputedStyle(x),r=x.getBoundingClientRect();return
-    x.scrollHeight-x.clientHeight>65 && visible(x) && r.width>80 && r.height>60 &&
+  const scrollable=x => {const st=getComputedStyle(x),r=x.getBoundingClientRect();return x.scrollHeight-x.clientHeight>65 && visible(x) && r.width>80 && r.height>60 &&
     /(auto|scroll|overlay)/.test(st.overflowY)};
   const anchors=[...document.querySelectorAll('a[href*="comment_id="]')].filter(visible);
   const roots=[...document.querySelectorAll('[role="dialog"],[role="complementary"]')].filter(visible);

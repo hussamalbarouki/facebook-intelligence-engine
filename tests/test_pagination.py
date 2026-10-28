@@ -39,6 +39,12 @@ class PaginationContractTests(unittest.TestCase):
             with self.subTest(label=bad):
                 self.assertIsNone(REACTION_LIST_LABEL.search(bad))
 
+    def test_scrollable_predicate_never_has_automatic_semicolon_after_return(self):
+        # JavaScript treats a newline immediately following return as
+        # automatic semicolon insertion: return; x.scrollHeight never runs.
+        self.assertNotRegex(SCROLL_JS,r'return\\s*\\n')
+        self.assertIn('return x.scrollHeight',SCROLL_JS)
+
     def test_dom_scripts_do_not_click_or_submit_reactions(self):
         for code in (SCROLL_JS,REACTION_DOM_JS,REACTION_SCROLL_JS):
             self.assertNotIn('.click(',code)
