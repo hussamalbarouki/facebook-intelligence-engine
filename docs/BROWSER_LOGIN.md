@@ -1,10 +1,10 @@
-# Browser Login & Saved Facebook Profile — v2.1.0
+# Browser Login & Saved Facebook Profile — v2.1.1
 
 **Purpose:** Stop exporting Facebook c_user/xs cookies manually. The user opens an HTTPS page on the same Coolify deployment, logs in to Facebook in an interactive Chromium browser, then saves/closes that browser. The read-only extraction engine subsequently opens the **same persistent Chrome profile**.
 
 ## Admin workflow
 1. In Coolify, make sure `/data` is a persistent volume/mount. This is essential — the files must survive Redeploy and container recreation.
-2. Confirm `/healthz` returns version `2.1.0` and the domain is HTTPS.
+2. Confirm `/healthz` returns version `2.1.1` and the domain is HTTPS.
 3. Open `https://dia.ee-link.info/browser-login` on mobile or desktop.
 4. Enter the service's existing `API_KEY` on the page, then click 'فتح المتصفح الآمن'. The API key is sent only as an X-API-Key header over HTTPS and is not put in URLs or localStorage.
 5. A graphical browser running on the VPS appears. Sign in to Facebook yourself and complete any MFA/checkpoint. Do not log out of Facebook.
@@ -38,3 +38,6 @@
 - The Docker build tests real Chromium headed mode on Xvfb, saves a synthetic cookie to a profile, closes Chrome, launches a fresh process and verifies the cookie persists.
 - Build and `/healthz` smoke checks must succeed before GHCR `latest` is pushed.
 - The last acceptance step — actual Facebook access on the user's VPS and user account — must be tested interactively by the user.
+## Session-cookie continuity
+
+Chromium may discard session-only cookies on full browser exit. The login worker now captures Playwright's storage state **in memory**, encrypts the Facebook-scoped subset with Fernet using the existing `/data/cookie-encryption.key`, and atomically writes `/data/facebook-profile-state.enc` with permissions 0600. The extraction engine decrypts and restores that snapshot into the same persistent Chrome profile before navigating Facebook and refreshes the snapshot after extracting a post. No unencrypted state is saved to a temporary file. This snapshot must remain on the same persistent volume as the encryption key. Test harness closes Chromium, restarts it and explicitly proves a session-only cookie survives via encrypted restoration.

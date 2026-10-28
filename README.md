@@ -1,8 +1,8 @@
-# Facebook Intelligence Engine v2.1.0
+# Facebook Intelligence Engine v2.1.1
 
 **Current production engine:** independent read-only Playwright engine with persistent human-signed-in Chrome profile, multilingual comment navigation and parser. The previous GraphQL/HTML adapters are only used when FB_ENGINE=legacy is explicitly selected.
 
-Browser login: `https://dia.ee-link.info/browser-login` (requires the API key and a persistent `/data` volume; available after deploying v2.1.0). Read [installation and security](docs/BROWSER_LOGIN.md).
+Browser login: `https://dia.ee-link.info/browser-login` (requires the API key and a persistent `/data` volume; available after deploying v2.1.1). Read [installation and security](docs/BROWSER_LOGIN.md).
 
 Read [V2 engine architecture, languages, tests and deployment](docs/ENGINE_READ_ONLY_V2.md).
 

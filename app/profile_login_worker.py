@@ -12,6 +12,7 @@ import signal
 import time
 
 from playwright.sync_api import sync_playwright
+from .profile_state import save_state,restore_state
 
 BASE=Path(os.environ.get('DATA_DIR','/data'))
 PROFILE=BASE/'facebook-profile'
@@ -34,14 +35,15 @@ def main():
             args=['--disable-dev-shm-usage','--no-first-run',
                   '--no-default-browser-check','--disable-gpu'])
         try:
+            # Important for Facebook session cookies with no Expires: these
+            # vanish on a full browser restart unless explicitly restored.
+            restore_state(context,BASE)
             page=context.pages[0] if context.pages else context.new_page()
             try:page.goto('https://www.facebook.com/',wait_until='domcontentloaded',timeout=20000)
             except Exception:pass
             while not STOP:
                 time.sleep(0.3)
-            cookies=context.cookies(['https://www.facebook.com/'])
-            names={c.get('name') for c in cookies}
-            authenticated={'c_user','xs'}.issubset(names)
+            authenticated=save_state(context,BASE)
         finally:
             context.close()
     # Write readiness ONLY after the browser fully exits. A marker alone is

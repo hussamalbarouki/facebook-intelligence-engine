@@ -18,7 +18,7 @@ from .storage import JobStore
 from .browser_login import LoginSession,profile_ready
 from .browser_login_routes import install as install_browser_login
 
-VERSION='2.1.0'
+VERSION='2.1.1'
 log=logging.getLogger('fb-engine')
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 
@@ -107,6 +107,13 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
         login_manager.shutdown()
         t.join(timeout=4)
 
+    def facebook_credentials_status():
+        c=vault.status()
+        if profile_ready(root):
+            return {**c,'configured':True,'source':'saved_browser_profile',
+                    'message':'Persistent Chrome profile saved; Facebook may require reauthentication.'}
+        return {**c,'source':'manual_cookies' if c['configured'] else 'none'}
+
     app=FastAPI(title='Facebook Intelligence Engine',version=VERSION,description='Self-hosted extraction API. Facebook scraping results can be incomplete.',lifespan=lifespan)
     app.state.store=store;app.state.vault=vault
     app.state.login_manager=login_manager
@@ -123,7 +130,7 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
     @app.get('/v1/status',dependencies=[Depends(authorize)])
     def status():
         return {'ok':True,'version':VERSION,'adapter':'read-only-v2-playwright-engine',
-                'cookies':vault.status(),'saved_browser_profile':profile_ready(root),
+                'cookies':facebook_credentials_status(),'saved_browser_profile':profile_ready(root),
                 'browser_login_active':login_manager.active(),
                 'settings':store.settings(),'queue':store.metrics()}
 
@@ -139,7 +146,7 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
         return store.update_settings(updates)
 
     @app.get('/v1/facebook/cookies',dependencies=[Depends(authorize)])
-    def cookies_status():return vault.status()
+    def cookies_status():return facebook_credentials_status()
 
     @app.put('/v1/facebook/cookies',dependencies=[Depends(authorize)])
     def cookies_put(body:CookieUpload):
@@ -151,7 +158,10 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
 
     @app.get('/v1/facebook/session-check',dependencies=[Depends(authorize)])
     def session_check():
-        # Credentials are read only on VPS and never sent back to the browser.
+        if profile_ready(root):
+            return {'status':'browser_profile_saved','browser_profile_saved':True,
+                    'token_available':False,
+                    'note':'Chrome profile exists; acceptance by Facebook is checked during extraction.'}
         with vault.temporary_cookie_file() as cookie_path:
             return probe_cookie_file(cookie_path)
 

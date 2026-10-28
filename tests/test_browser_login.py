@@ -69,6 +69,22 @@ class BrowserLoginTests(unittest.TestCase):
                 self.assertTrue(client.post('/v1/browser-session/save',
                     headers={'Origin':'https://testserver'}).json()['saved'])
 
+    def test_saved_profile_counts_as_configured_session_in_admin_api(self):
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'facebook-profile'
+            p.mkdir()
+            (Path(d)/'facebook-profile-ready.json').write_text('{"saved":true}')
+            app=create_app(d,KEY,lambda *a,**kw:{})
+            with TestClient(app,base_url='https://testserver') as client:
+                out=client.get('/v1/status',headers={'X-API-Key':KEY}).json()
+                self.assertTrue(out['saved_browser_profile'])
+                self.assertTrue(out['cookies']['configured'])
+                self.assertEqual(out['cookies']['source'],'saved_browser_profile')
+                diag=client.get('/v1/facebook/session-check',
+                               headers={'X-API-Key':KEY}).json()
+                self.assertTrue(diag['browser_profile_saved'])
+                self.assertFalse(diag['token_available'])
+
     def test_saved_profile_routing_without_any_manual_cookie_export(self):
         url='https://www.facebook.com/share/v/1EcqWbUzGA/'
         with patch.dict(os.environ,{'FB_ENGINE':'read_only_v2'}), \

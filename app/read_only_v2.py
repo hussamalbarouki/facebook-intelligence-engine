@@ -393,6 +393,8 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                         profile,headless=False,viewport={'width':1365,'height':910},
                         service_workers='block',
                         args=['--disable-dev-shm-usage','--no-first-run','--disable-gpu'])
+                    from .profile_state import restore_state,save_state
+                    restore_state(context,os.getenv('DATA_DIR','/data'))
                     entries=[]
                 else:
                     # Legacy manual-cookie fallback, used until an interactive
@@ -479,6 +481,15 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                     else 'no_verifiable_interactions')
             finally:
                 if context is not None:
+                    if use_saved_profile:
+                        # Encrypt and persist refreshed session cookies after
+                        # each scrape, before closing the SAME profile.
+                        try:
+                            from .profile_state import save_state
+                            save_state(context,os.getenv('DATA_DIR','/data'))
+                        except Exception as exc:
+                            log.warning('Could not persist refreshed browser session: %s',
+                                        type(exc).__name__)
                     try:context.close()
                     except Exception:pass
                 if browser is not None:
