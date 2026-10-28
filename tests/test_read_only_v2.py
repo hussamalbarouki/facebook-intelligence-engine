@@ -45,7 +45,7 @@ class MultilingualEngineTests(unittest.TestCase):
         payload={"data":{"feedback":{"comments":{"edges":[{"node":{
             "__typename":"Comment","id":"2319889195441081",
             "author":{"name":"عبدالله صالح","url":"https://www.facebook.com/profile.php?id=1234567"},
-            "body":{"text":"ویدیو अच्छा है"}}]}}}}
+            "body":{"text":"ویدیو अच्छा है"}}}]}}}}
         counts=_capture_graphql(json.dumps(payload,ensure_ascii=False),c,r,(5,5))
         self.assertEqual(counts['comment_shapes'],1)
         self.assertEqual(c['2319889195441081']['name'],"عبدالله صالح")
