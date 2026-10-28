@@ -407,10 +407,14 @@ def scrape_post(url, comment_limit, reactor_limit, cookies_file=None):
     """V2 complete Playwright engine by default; legacy can be explicitly restored."""
     if os.getenv('FB_ENGINE','read_only_v2').strip().lower()!='legacy':
         validate_facebook_url(url)
-        if not cookies_file:
+        from .browser_login import profile_ready
+        saved_profile=profile_ready()
+        if not cookies_file and not saved_profile:
             raise ExtractionError('FACEBOOK_COOKIES_REQUIRED')
         normalized=url
-        if is_share_link(url):
+        # The saved Chromium profile follows opaque share/reel redirects itself.
+        # Never bootstrap a second Requests login session when using it.
+        if is_share_link(url) and not saved_profile:
             normalized,_=resolve_share_link(url,cookies_file)
         from .read_only_v2 import run
         try:

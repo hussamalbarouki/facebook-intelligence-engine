@@ -1,0 +1,28 @@
+<!doctype html><html lang="ar" dir="rtl"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>Facebook — تسجيل الدخول داخل VPS</title>
+<link rel="stylesheet" href="/browser-ui/login.css">
+<script type="module" src="/browser-ui/login.js"></script>
+</head><body>
+<main>
+<header><h1>تسجيل Facebook داخل المحرك</h1>
+<p>هذه شاشة المتصفح الموجود على خادمك نفسه. سجّل دخولك ثم اضغط «حفظ وإغلاق». لا ترسل بيانات الدخول في المحادثة.</p></header>
+<section id="auth">
+<label for="admin-key">مفتاح إدارة المحرك (API Key)</label>
+<input id="admin-key" type="password" autocomplete="off" spellcheck="false" placeholder="مفتاح إدارة المحرك" />
+<button type="button" id="start">فتح المتصفح الآمن</button>
+</section>
+<section id="browser" hidden>
+<div class="bar">
+<span id="state">جاري الاتصال بالمتصفح…</span>
+<button id="focus" type="button">لوحة المفاتيح</button>
+<button id="save" type="button">حفظ الجلسة وإغلاق المتصفح</button>
+</div>
+<div id="screen" tabindex="0" aria-label="متصفح Facebook داخل الخادم"></div>
+<p class="help">يمكنك اللمس والسحب والتكبير داخل المتصفح. لا تضغط «تسجيل الخروج» من Facebook؛ استخدم زر الحفظ أعلاه.</p>
+</section>
+<p id="message" role="status" aria-live="polite"></p>
+<footer>الجلسة تُحفظ في التخزين الدائم للخادم. صلاحية دخول Facebook نفسها قد تنتهي لاحقًا وتحتاج تسجيل دخول جديد.</footer>
+</main>
+</body></html>

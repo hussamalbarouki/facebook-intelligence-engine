@@ -15,8 +15,10 @@ from .engine import scrape_post, validate_facebook_url, ExtractionError, parse_p
 from .facebook_session import probe_cookie_file, probe_post_access
 from .secrets import CookieVault
 from .storage import JobStore
+from .browser_login import LoginSession,profile_ready
+from .browser_login_routes import install as install_browser_login
 
-VERSION='2.0.1'
+VERSION='2.1.0'
 log=logging.getLogger('fb-engine')
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 
@@ -46,6 +48,7 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
     root.mkdir(parents=True,exist_ok=True)
     store=JobStore(str(root/'jobs.sqlite3'))
     vault=CookieVault(store,root)
+    login_manager=LoginSession(root)
     scraper=scraper or scrape_post
     stop=threading.Event()
     api_header=APIKeyHeader(name='X-API-Key',auto_error=False)
@@ -64,6 +67,11 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
                 try:store.cleanup(store.settings()['retention_days'])
                 except Exception:log.exception('Housekeeping failed')
                 last_cleanup=now
+            # Never read an in-use Chrome user profile. Jobs stay queued
+            # while the administrator is entering or saving a login.
+            login_manager.sweep()
+            if login_manager.active():
+                stop.wait(1);continue
             if not store.settings()['jobs_enabled']:
                 stop.wait(1);continue
             row=store.claim()
@@ -96,10 +104,13 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
         t.start()
         yield
         stop.set()
+        login_manager.shutdown()
         t.join(timeout=4)
 
     app=FastAPI(title='Facebook Intelligence Engine',version=VERSION,description='Self-hosted extraction API. Facebook scraping results can be incomplete.',lifespan=lifespan)
     app.state.store=store;app.state.vault=vault
+    app.state.login_manager=login_manager
+    install_browser_login(app,login_manager,authorize)
 
     @app.get('/healthz',include_in_schema=False)
     def health():return {'ok':True,'service':'facebook-intelligence-engine','version':VERSION}
@@ -112,7 +123,9 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
     @app.get('/v1/status',dependencies=[Depends(authorize)])
     def status():
         return {'ok':True,'version':VERSION,'adapter':'read-only-v2-playwright-engine',
-                'cookies':vault.status(),'settings':store.settings(),'queue':store.metrics()}
+                'cookies':vault.status(),'saved_browser_profile':profile_ready(root),
+                'browser_login_active':login_manager.active(),
+                'settings':store.settings(),'queue':store.metrics()}
 
     @app.get('/v1/settings',dependencies=[Depends(authorize)])
     def get_settings():return store.settings()
@@ -189,12 +202,13 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
         if not row:raise HTTPException(status_code=404,detail='Job not found')
         try:
             with vault.temporary_cookie_file() as cookie_path:
-                if not cookie_path:
-                    raise HTTPException(status_code=409,detail='Facebook cookies not configured')
+                saved=profile_ready(root)
+                if not cookie_path and not saved:
+                    raise HTTPException(status_code=409,detail='No stored Facebook browser profile or cookies')
                 from .engine import resolve_share_link
                 from .read_only_v2 import run as scrape_with_browser
                 url=row['url']
-                if is_share_link(url):
+                if is_share_link(url) and not saved:
                     url,_=resolve_share_link(url,cookie_path)
                 diagnostics=scrape_with_browser(
                     url,min(row['comment_limit'],10),min(row['reactor_limit'],10),

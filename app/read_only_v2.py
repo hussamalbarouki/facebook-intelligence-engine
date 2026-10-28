@@ -347,7 +347,10 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
     """Complete browser session, page navigation, collection, pagination and parsing."""
     if os.getenv('FB_BROWSER_ENABLED','1').lower() in ('0','false','no'):
         raise RuntimeError('BROWSER_DISABLED')
-    if not cookies_file:raise RuntimeError('FACEBOOK_COOKIES_REQUIRED')
+    from .browser_login import profile_ready
+    use_saved_profile=profile_ready()
+    if not cookies_file and not use_saved_profile:
+        raise RuntimeError('FACEBOOK_COOKIES_REQUIRED')
     if not LOCK.acquire(blocking=False):raise RuntimeError('BROWSER_RESOURCE_BUSY')
     try:
         from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
@@ -378,14 +381,30 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                     else:stats[name]+=count
             except Exception:return
         with sync_playwright() as pw:
-            browser=pw.chromium.launch(headless=True,args=['--disable-dev-shm-usage','--disable-gpu','--no-first-run'])
+            browser=None
+            context=None
             try:
-                context=browser.new_context(viewport={'width':1365,'height':910},service_workers='block')
-                entries=_cookie_entries(cookies_file)
-                context.add_cookies(entries)
-                # Context cookies() checks what the browser can ACTUALLY send
-                # to this target URL. Never disclose values or all cookie names.
+                if use_saved_profile:
+                    # Actual Chrome user profile from the interactive VPS
+                    # browser login. Same DISPLAY, same data dir, same Chrome
+                    # revision; no cookie export/import or separate session.
+                    profile=os.path.join(os.getenv('DATA_DIR','/data'),'facebook-profile')
+                    context=pw.chromium.launch_persistent_context(
+                        profile,headless=False,viewport={'width':1365,'height':910},
+                        service_workers='block',
+                        args=['--disable-dev-shm-usage','--no-first-run','--disable-gpu'])
+                    entries=[]
+                else:
+                    # Legacy manual-cookie fallback, used until an interactive
+                    # profile has been saved for the first time.
+                    browser=pw.chromium.launch(headless=True,args=[
+                        '--disable-dev-shm-usage','--disable-gpu','--no-first-run'])
+                    context=browser.new_context(viewport={'width':1365,'height':910},
+                                                service_workers='block')
+                    entries=_cookie_entries(cookies_file)
+                    context.add_cookies(entries)
                 scoped={item.get('name') for item in context.cookies([url])}
+                stats['session_source']='saved_browser_profile' if use_saved_profile else 'manual_cookies'
                 stats['cookie_scope']={
                    'c_user_for_target':'c_user' in scoped,
                    'xs_for_target':'xs' in scoped,
@@ -458,9 +477,13 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                         stats['ui_final']['login_fields'] or stats['ui_after']['login_fields'])
                     else 'comment_panel_not_opened' if maxc and not stats['comment_opened']
                     else 'no_verifiable_interactions')
-                context.close()
             finally:
-                browser.close()
+                if context is not None:
+                    try:context.close()
+                    except Exception:pass
+                if browser is not None:
+                    try:browser.close()
+                    except Exception:pass
         log.info('V2 read-only result: kind=%s comments=%d reactors=%d gql=%d opened=%s status=%s',
                  stats.get('page_kind'),len(comments),len(reactors),stats['observed_graphql'],
                  stats['comment_opened'],stats['status'])

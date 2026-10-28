@@ -9,7 +9,8 @@ RUN groupadd --system engine && useradd --system --gid engine --create-home --ho
     && mkdir -p /data /home/engine/.config /home/engine/.cache \
     && chown -R engine:engine /data /home/engine \
     && chmod 700 /home/engine/.config /home/engine/.cache
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git xvfb xauth x11vnc novnc && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 # Build must fail if the scraper cannot import (unit tests use a fake scraper).
@@ -20,14 +21,23 @@ RUN python -m playwright install --with-deps chromium && chmod -R a+rX /opt/pw-b
 
 COPY app ./app
 COPY tests/browser_smoke.py ./browser_smoke.py
+COPY tests/profile_smoke.py ./profile_smoke.py
+COPY entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh \
+    && test -f /usr/share/novnc/core/rfb.js
 USER engine
 # Smoke test the *runtime* browser during image build, as the unprivileged
 # engine user. A published image is not released if Chrome cannot launch.
 RUN python -c 'import os; assert all(os.access(p,os.W_OK) for p in (os.environ["HOME"],os.environ["XDG_CONFIG_HOME"],os.environ["XDG_CACHE_HOME"])); print("Chromium writable user paths OK")' \
     && python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); b=p.chromium.launch(headless=True,args=["--disable-dev-shm-usage"]); page=b.new_page(); page.goto("data:text/html,<h1>browser-ready</h1>"); assert page.locator("h1").inner_text()=="browser-ready"; b.close(); p.stop(); print("headless Chromium smoke test OK")'
 RUN python browser_smoke.py
+# Reopens a real persistent Chromium profile after a complete process exit.
+# This smoke test uses fake test cookies and never logs into Facebook.
+RUN xvfb-run -a -s "-screen 0 1365x910x24" python profile_smoke.py
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/healthz",timeout=3)' || exit 1
 # The API must start independently of the browser subsystem.
 # The fallback launches its own headless browser only when needed.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# A display is available for a human login and each subsequent extraction.
+# X11 itself exposes no TCP port; x11vnc is only started upon admin approval.
+CMD ["/bin/sh", "/service/entrypoint.sh"]
