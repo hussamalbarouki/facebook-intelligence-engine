@@ -274,11 +274,16 @@ READ_COMMENTS_JS=r"""() => {
 }"""
 
 UI_SIGNALS_JS=r"""() => {
+ const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+ const email = document.querySelector('input[name="email"]');
+ const pass = document.querySelector('input[name="pass"]');
  const anchors=document.querySelectorAll('a[href*="comment_id="]').length;
  const dialogs=document.querySelectorAll('[role="dialog"]').length;
  const articles=document.querySelectorAll('[role="article"]').length;
  return {visible_comment_links:anchors,dialogs,articles,
-   login_fields:!!document.querySelector('input[name="email"],input[name="pass"]'),
+   login_fields:visible(email)&&visible(pass),
+   login_fields_present:!!(email&&pass),
+   comment_widgets:document.querySelectorAll('[role="button"],button').length,
    page_language:(document.documentElement.lang||'').slice(0,16)};
 }"""
 
@@ -324,6 +329,20 @@ def _scroll_actual_panel(page):
         }""")
     except Exception:return False
 
+def _assess_login(path,signals,scope):
+    """Classify browser evidence without guessing that all forms mean logout."""
+    path=(path or '').lower()
+    if '/checkpoint' in path or '/two_step_verification' in path:
+        return 'checkpoint_redirect'
+    if '/login' in path:
+        return 'login_redirect'
+    if not (scope.get('c_user_for_target') and scope.get('xs_for_target')):
+        return 'cookie_domain_path_mismatch'
+    if signals.get('login_fields'):
+        return 'visible_login_overlay_on_content'
+    return 'no_visible_login_overlay'
+
+
 def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
     """Complete browser session, page navigation, collection, pagination and parsing."""
     if os.getenv('FB_BROWSER_ENABLED','1').lower() in ('0','false','no'):
@@ -342,7 +361,9 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                'comment_shapes':0,'reaction_shapes':0,'graphql_errors':0,
                'comment_opened':False,'comment_entry_label_language_independent':True,
                'ui_before':{},'ui_after':{},'ui_final':{},
-               'comments_extracted':0,'reactors_extracted':0,'status':'running'}
+               'comments_extracted':0,'reactors_extracted':0,'status':'running',
+               'cookie_scope':{'c_user_for_target':False,'xs_for_target':False},
+               'navigation':'not_started','login_classification':'not_checked'}
         begin=time.monotonic()
         def on_response(response):
             if time.monotonic()-begin>TIME_CAP or stats['observed_graphql']>=RESPONSE_CAP:return
@@ -360,7 +381,16 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
             browser=pw.chromium.launch(headless=True,args=['--disable-dev-shm-usage','--disable-gpu','--no-first-run'])
             try:
                 context=browser.new_context(viewport={'width':1365,'height':910},service_workers='block')
-                context.add_cookies(_cookie_entries(cookies_file))
+                entries=_cookie_entries(cookies_file)
+                context.add_cookies(entries)
+                # Context cookies() checks what the browser can ACTUALLY send
+                # to this target URL. Never disclose values or all cookie names.
+                scoped={item.get('name') for item in context.cookies([url])}
+                stats['cookie_scope']={
+                   'c_user_for_target':'c_user' in scoped,
+                   'xs_for_target':'xs' in scoped,
+                   'cookie_entries_accepted':len(entries),
+                   'cookie_entries_for_target':len(scoped)}
                 page=context.new_page()
                 page.on('response',on_response)
                 page.route('**/*',lambda route: route.abort() if route.request.resource_type in ('image','media','font') else route.continue_())
@@ -372,8 +402,29 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                 video=('/reel/' in path or '/videos/' in path or '/watch/' in path)
                 stats['page_kind']='reel' if '/reel/' in path else 'video' if video else 'post'
                 stats['ui_before']=page.evaluate(UI_SIGNALS_JS)
-                if '/login' in path or '/checkpoint' in path or stats['ui_before']['login_fields']:
+                stats['navigation']='facebook_page'
+                stats['login_classification']=_assess_login(
+                    path,stats['ui_before'],stats['cookie_scope'])
+                log.info('V2 auth classification: state=%s c_user_at_target=%s xs_at_target=%s',
+                         stats['login_classification'],
+                         stats['cookie_scope']['c_user_for_target'],
+                         stats['cookie_scope']['xs_for_target'])
+                if stats['login_classification']=='checkpoint_redirect':
+                    stats['navigation']='checkpoint'
+                    stats['status']='facebook_checkpoint_required'
+                    if diagnostic_only:return stats
+                    raise RuntimeError('FACEBOOK_CHECKPOINT_REQUIRED')
+                if stats['login_classification']=='login_redirect':
+                    stats['navigation']='login'
+                    stats['status']='facebook_login_required'
+                    if diagnostic_only:return stats
                     raise RuntimeError('FACEBOOK_LOGIN_REQUIRED')
+                if stats['login_classification']=='cookie_domain_path_mismatch':
+                    stats['status']='cookie_scope_mismatch'
+                    if diagnostic_only:return stats
+                    raise RuntimeError('FACEBOOK_COOKIES_SCOPE_MISMATCH')
+                # A visible login overlay on a non-login Reel URL is not in
+                # itself proof of an expired session: inspect comment UI first.
                 if maxc:
                     clicked=_read_only_open(page,video)
                     stats['comment_opened']=bool(clicked)
@@ -400,8 +451,12 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                 stats['ui_final']=page.evaluate(UI_SIGNALS_JS)
                 stats['comments_extracted']=len(comments)
                 stats['reactors_extracted']=len(reactors)
+                # A persistent visible login overlay is a *different* failure
+                # from "no identifiable comments" or a /login redirect.
                 stats['status']='data_found' if (comments or reactors) else (
-                    'comment_panel_not_opened' if maxc and not stats['comment_opened']
+                    'facebook_login_overlay_visible' if (
+                        stats['ui_final']['login_fields'] or stats['ui_after']['login_fields'])
+                    else 'comment_panel_not_opened' if maxc and not stats['comment_opened']
                     else 'no_verifiable_interactions')
                 context.close()
             finally:
@@ -411,6 +466,8 @@ def run(url,comment_limit,reactor_limit,cookies_file,diagnostic_only=False):
                  stats['comment_opened'],stats['status'])
         if diagnostic_only:return stats
         if not comments and not reactors:
+            if stats['status']=='facebook_login_overlay_visible':
+                raise RuntimeError('FACEBOOK_LOGIN_WALL_VISIBLE')
             raise RuntimeError('BROWSER_NO_VERIFIABLE_INTERACTIONS')
         return {
             'post':{'id':None,'url':url,'author':None,'text':None,'time':None,

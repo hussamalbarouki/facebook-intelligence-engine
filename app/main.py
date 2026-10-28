@@ -16,7 +16,7 @@ from .facebook_session import probe_cookie_file, probe_post_access
 from .secrets import CookieVault
 from .storage import JobStore
 
-VERSION='2.0.0'
+VERSION='2.0.1'
 log=logging.getLogger('fb-engine')
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
 
@@ -205,7 +205,8 @@ def create_app(data_dir: str | None=None, api_key: str | None=None, scraper=None
         except Exception as exc:
             code=str(exc) if type(exc) is RuntimeError else type(exc).__name__
             if code not in ('BROWSER_RESOURCE_BUSY','BROWSER_DISABLED',
-                            'BROWSER_LOGIN_OR_CHECKPOINT_REQUIRED',
+                            'FACEBOOK_LOGIN_REQUIRED','FACEBOOK_LOGIN_WALL_VISIBLE',
+                            'FACEBOOK_COOKIES_SCOPE_MISMATCH','FACEBOOK_CHECKPOINT_REQUIRED',
                             'FACEBOOK_SHARE_LINK_UNRESOLVED'):
                 code='BROWSER_DIAGNOSTIC_UNAVAILABLE'
             return {'job_id':job_id,'status':'diagnostic_failed','code':code}

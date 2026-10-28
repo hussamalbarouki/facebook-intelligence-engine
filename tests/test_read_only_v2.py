@@ -76,6 +76,16 @@ class MultilingualEngineTests(unittest.TestCase):
         call.assert_called_once()
         self.assertEqual(result['comments'][0]['name'],'Test')
 
+    def test_login_wall_vs_redirect_codes_remain_distinct(self):
+        for code in ('FACEBOOK_LOGIN_WALL_VISIBLE','FACEBOOK_LOGIN_REQUIRED',
+                     'FACEBOOK_COOKIES_SCOPE_MISMATCH','FACEBOOK_CHECKPOINT_REQUIRED'):
+            with self.subTest(code=code):
+                with patch.dict(os.environ,{'FB_ENGINE':'read_only_v2'}), \
+                     patch('app.read_only_v2.run',side_effect=RuntimeError(code)):
+                    with self.assertRaises(ExtractionError) as ctx:
+                        scrape_post(TEST_URL,3,3,'/tmp/test.json')
+                self.assertEqual(ctx.exception.code,code)
+
     def test_no_data_failure_and_legacy_unused(self):
         with patch.dict(os.environ,{'FB_ENGINE':'read_only_v2'}), \
              patch('app.read_only_v2.run',side_effect=RuntimeError('BROWSER_NO_VERIFIABLE_INTERACTIONS')):

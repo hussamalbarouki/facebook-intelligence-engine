@@ -420,7 +420,8 @@ def scrape_post(url, comment_limit, reactor_limit, cookies_file=None):
             allowed={'BROWSER_DISABLED','BROWSER_RESOURCE_BUSY',
                      'BROWSER_NO_VERIFIABLE_INTERACTIONS','FACEBOOK_LOGIN_REQUIRED',
                      'FACEBOOK_COOKIES_REQUIRED','FACEBOOK_URL_INVALID',
-                     'FACEBOOK_LEFT_DOMAIN'}
+                     'FACEBOOK_LEFT_DOMAIN','FACEBOOK_LOGIN_WALL_VISIBLE',
+                     'FACEBOOK_COOKIES_SCOPE_MISMATCH','FACEBOOK_CHECKPOINT_REQUIRED'}
             raise ExtractionError(code if code in allowed else 'BROWSER_EXTRACTION_UNAVAILABLE') from None
         except Exception as exc:
             log.warning('V2 extraction failure: %s',type(exc).__name__)

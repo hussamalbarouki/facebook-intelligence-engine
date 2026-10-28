@@ -40,3 +40,18 @@ Commercial actors such as Apify may not expose their internal scraper code for c
 
 ## Important limitation
 Only an authenticated test against the user's Facebook Reel and the actual server-side session can prove this version extracts individual comments. No available method can guarantee access to all users who reacted when Facebook does not expose their identities.
+## v2.0.1 — Cookie-scope and login-wall diagnosis
+
+The production browser now distinguishes four different situations:
+- Actual Facebook /login redirect: FACEBOOK_LOGIN_REQUIRED.
+- Checkpoint or verification redirect: FACEBOOK_CHECKPOINT_REQUIRED.
+- Browser cannot send both c_user and xs to the target URL because of cookie domain/path scoping: FACEBOOK_COOKIES_SCOPE_MISMATCH.
+- A visible login form overlay on a Reel without a redirect, with no verifiable comments: FACEBOOK_LOGIN_WALL_VISIBLE.
+
+UI presence of email and password input fields alone is not proof of session expiration. The browser attempts read-only comment navigation first where the URL remains on the video.
+
+The authenticated browser-diagnostics endpoint now reports non-sensitive browser cookie scope booleans, page category, login classification and UI counts. It never returns cookie values, session IDs, HTML or raw GraphQL payloads.
+
+**IMPORTANT:** HTTP 200 from PUT /v1/facebook/cookies means cookie structure was stored, not that Facebook has accepted authentication. A separate TinyFish authenticated browser profile cannot automatically transfer its saved login into the Coolify cookie vault. Real session acceptance must be tested on the VPS with its own cookies. Do not copy login credentials into chat.
+
+Test acceptance: /healthz reports 2.0.1, then retry the original Reel and, if it still fails, call POST /v1/jobs/{id}/browser-diagnostics and share only the sanitized JSON.

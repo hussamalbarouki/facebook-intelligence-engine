@@ -4,7 +4,7 @@ Uses synthetic data: it verifies actual JS locators and comment permalink
 extraction in the real installed browser, without any Facebook credentials.
 """
 from playwright.sync_api import sync_playwright
-from app.read_only_v2 import READ_COMMENTS_JS,UI_SIGNALS_JS,_read_only_open
+from app.read_only_v2 import READ_COMMENTS_JS,UI_SIGNALS_JS,_read_only_open,_assess_login
 from app.browser_engine import (_DOM_COMMENT_JS, _safe_page_signals,
                                 _visible_comment_entry_buttons, _scroll_visible_dialog,
                                 _browser_page_classification)
@@ -86,6 +86,24 @@ with sync_playwright() as p:
         assert reel[0]['text']=="اختبار تعليق वास्तविक اردو",reel
         sig=page.evaluate(UI_SIGNALS_JS)
         assert sig['visible_comment_links']==1,sig
+        # A public Reel may show a visible login form while the URL stays
+        # /reel/: this MUST NOT be confused with a /login redirect.
+        page.set_content("""<html><body>
+          <form><input name="email"><input name="pass" type="password"></form>
+          <button id="comments" onclick="this.dataset.opened='yes'">Commenter</button>
+          <button id="like" onclick="this.dataset.liked='yes'">J'aime</button>
+        </body></html>""",wait_until='domcontentloaded')
+        auth_signals=page.evaluate(UI_SIGNALS_JS)
+        assert auth_signals['login_fields'], auth_signals
+        assert _assess_login('/reel/1418347453748116',auth_signals,{
+            'c_user_for_target':True,'xs_for_target':True
+        })=='visible_login_overlay_on_content'
+        assert _read_only_open(page,True)=='Commenter'
+        assert page.locator('#comments').get_attribute('data-opened')=='yes'
+        assert page.locator('#like').get_attribute('data-liked') is None
+        page.locator('form').evaluate('(f)=>f.style.display="none"')
+        assert not page.evaluate(UI_SIGNALS_JS)['login_fields']
+        print('V2 login-overlay classification and read-only control smoke OK')
         print('V2 French Reel comments, Unicode extraction and Like safety smoke OK')
         print('Real Chromium DOM comment extraction, controls and scroll smoke OK')
     finally:

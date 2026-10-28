@@ -1,4 +1,4 @@
-# Facebook Intelligence Engine v2.0.0
+# Facebook Intelligence Engine v2.0.1
 
 **Current production engine:** independent read-only Playwright engine with multilingual comment navigation and parser. The previous GraphQL/HTML adapters are only used when FB_ENGINE=legacy is explicitly selected.
 
