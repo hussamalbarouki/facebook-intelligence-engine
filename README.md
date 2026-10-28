@@ -9,7 +9,7 @@ from an actual running Docker container before reporting a successful release.
 If a preceding build caused HTTP 503, first restore the previous stable image
 pinned by commit, then redeploy v1.3.1 after its GitHub Actions release succeeds.
 
-## v1.3.2 — Browser-first extraction and per-job live diagnostics
+## v1.3.3 — Browser-first extraction and per-job live diagnostics
 
 This version addresses a real production log pattern: Facebook loaded nine
 GraphQL responses, but the extractor found no verifiable comments or reactors.
@@ -47,3 +47,27 @@ actual session and the actual post.
 Limits remain in place: 1 browser at once, 55-second bounded attempt, at most
 100 comments and 100 reactors per browser attempt; no raw GraphQL responses
 are logged or persisted.
+
+## v1.3.3 — browser visibility and release reliability
+
+- Facebook UI classification is collected at three phases: after hydration,
+  after opening a comment-list control, and after comment expansion. The
+  diagnostic endpoint reports only counts and categorical statuses.
+- The browser waits for the initial React hydration and can open comment counts
+  exposed as custom role=button controls. Scroll targets include actual
+  scrollable comment dialogs; no Like, Follow, Reply or Send action is used.
+- Reactor records without profile URLs are now deduplicated by actor ID, not
+  all collapsed into a None key.
+- When the browser observes no verifiable interactions, the user-visible job
+  error is BROWSER_NO_VERIFIABLE_INTERACTIONS rather than the secondary legacy
+  GRAPHQL_DOC_ID_UNAVAILABLE failure.
+- The CI release process only pushes the latest Docker image after all tests
+  and a running-container /healthz check succeed. A failed smoke test cannot
+  overwrite the last known good latest image.
+- This version has offline browser and API tests only. It is **not verified
+  against the user's live Facebook post**. Run the authenticated
+  POST /v1/jobs/{job_id}/browser-diagnostics on your VPS and check the
+  initial, after-open, and final UI classifications.
+
+The service cannot guarantee extraction from Facebook pages that withhold
+comments or individual reactor identities from the authenticated session.

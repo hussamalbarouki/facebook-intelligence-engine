@@ -29,9 +29,9 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          push: false
+          load: true
           tags: |
-            ghcr.io/${{ github.repository }}:latest
             ghcr.io/${{ github.repository }}:${{ github.sha }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -42,7 +42,7 @@ jobs:
           IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
         run: |
           set -euo pipefail
-          docker pull "$IMAGE"
+          # Built image is already loaded into the runner's Docker daemon.
           docker run -d --rm --name fb-engine-api-smoke \
             --memory=2g --cpus=2 \
             -e API_KEY=abcdefghijklmnopqrstuvwxyzABCDEF \
@@ -61,6 +61,16 @@ jobs:
           echo "::error::API did not start or healthz was unhealthy."
           docker logs --tail 80 fb-engine-api-smoke || true
           exit 1
+      - name: Publish image only after all tests and live Docker health checks
+        if: ${{ success() }}
+        env:
+          IMAGE_SHA: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          IMAGE_LATEST: ghcr.io/${{ github.repository }}:latest
+        run: |
+          set -euo pipefail
+          docker push "$IMAGE_SHA"
+          docker tag "$IMAGE_SHA" "$IMAGE_LATEST"
+          docker push "$IMAGE_LATEST"
       - name: Trigger Coolify after a successful image publish (optional)
         if: ${{ success() }}
         env:

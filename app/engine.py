@@ -414,6 +414,7 @@ def scrape_post(url, comment_limit, reactor_limit, cookies_file=None):
     last_code='POST_URL_UNSUPPORTED' if reference is None else 'POST_NOT_PARSED'
     resolved_url=url
     browser_attempted=False
+    browser_no_verifiable_data=False
     if cookies_file and not reference and is_share_link(url):
         try:
             resolved_url,reference=resolve_share_link(url,cookies_file)
@@ -437,6 +438,7 @@ def scrape_post(url, comment_limit, reactor_limit, cookies_file=None):
             result=scrape_with_browser(resolved_url,comment_limit,reactor_limit,cookies_file)
             if _has_requested_interactions(result,comment_limit,reactor_limit):
                 return result
+            browser_no_verifiable_data=True
             attempted.append('browser-first-empty')
         except Exception as exc:
             reason=str(exc) if type(exc) is RuntimeError else type(exc).__name__
@@ -444,6 +446,8 @@ def scrape_post(url, comment_limit, reactor_limit, cookies_file=None):
                               'BROWSER_LOGIN_OR_CHECKPOINT_REQUIRED',
                               'BROWSER_NO_VERIFIABLE_INTERACTIONS'):
                 reason=type(exc).__name__
+            if reason=='BROWSER_NO_VERIFIABLE_INTERACTIONS':
+                browser_no_verifiable_data=True
             log.warning('Browser-first did not extract verified interactions: %s',reason)
             attempted.append('browser-first-'+reason.lower())
     if cookies_file and reference:
@@ -504,5 +508,9 @@ def scrape_post(url, comment_limit, reactor_limit, cookies_file=None):
             attempted.append('browser-'+reason.lower())
             if last_code in ('POST_NOT_PARSED','POST_URL_UNSUPPORTED'):
                 last_code='BROWSER_EXTRACTION_UNAVAILABLE' if reason!='BROWSER_DISABLED' else last_code
+    if browser_no_verifiable_data:
+        # The old GraphQL doc-id failure is a secondary fallback failure.
+        # Report the primary browser observation problem instead.
+        last_code='BROWSER_NO_VERIFIABLE_INTERACTIONS'
     log.warning('Post extraction failed after adapters: %s', ','.join(attempted))
     raise ExtractionError(last_code)

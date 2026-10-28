@@ -10,7 +10,8 @@ from unittest.mock import patch
 
 from app.browser_engine import (
     MAX_RESPONSE_BYTES, _parse_json_fragments, _browser_cookie_entries,
-    parse_graphql_interactions, graphql_response_shape, _valid_profile_url
+    parse_graphql_interactions, graphql_response_shape, _valid_profile_url,
+    _COMMENT_ENTRY_LABELS, _browser_page_classification
 )
 from app.engine import scrape_post, ExtractionError
 
@@ -106,6 +107,32 @@ class BrowserParsingTests(unittest.TestCase):
         self.assertIn('comment_id=789456123',_valid_profile_url(comment,comment_permalink=True))
         self.assertNotIn('fbclid',_valid_profile_url(comment,comment_permalink=True))
 
+    def test_comment_entry_patterns_cover_current_dialog_counts(self):
+        for label in ('View all 12 comments','See 34 comments',
+                      'View more comments','12 comments',
+                      'عرض كل التعليقات','Voir les commentaires',
+                      'Mostra i commenti'):
+            with self.subTest(label=label):
+                self.assertIsNotNone(_COMMENT_ENTRY_LABELS.search(label))
+        # Never auto-click the composer or an unrelated state-changing action.
+        for label in ('Comment','Reply','Like','Follow','Send comment'):
+            with self.subTest(label=label):
+                self.assertIsNone(_COMMENT_ENTRY_LABELS.search(label))
+
+    def test_safe_browser_classification_uses_counts_only(self):
+        from unittest.mock import Mock
+        page=Mock()
+        page.evaluate.return_value={
+            'login_input':False,'page_title_is_login':False,
+            'comment_permalink_links':0,'comment_articles':2,
+            'comment_entry_candidates':3,'reaction_entry_candidates':4,'lang':'en-US'}
+        value=_browser_page_classification(page)
+        self.assertEqual(value['status'],'comment_controls_visible')
+        self.assertEqual(value['comment_entry_candidates'],3)
+        self.assertNotIn('post_text',str(value))
+        page.evaluate.return_value={**page.evaluate.return_value,'login_input':True}
+        self.assertEqual(_browser_page_classification(page)['status'],'login_wall')
+
     def test_reactor_requires_reaction_context(self):
         payload={"data":{"users":{"edges":[{"node":{
             "name":"not-reactor","url":"https://www.facebook.com/normal"}}]}}}
@@ -140,7 +167,7 @@ class HybridPipelineTests(unittest.TestCase):
              patch('app.browser_engine.scrape_with_browser',return_value=empty):
             with self.assertRaises(ExtractionError) as x:
                 scrape_post(URL,5,5,'/tmp/fake.json')
-        self.assertEqual(x.exception.code,'GRAPHQL_DOC_ID_UNAVAILABLE')
+        self.assertEqual(x.exception.code,'BROWSER_NO_VERIFIABLE_INTERACTIONS')
 
     def test_browser_disabled_stays_explicitly_unavailable(self):
         with patch('app.engine._graphql_scrape',side_effect=ExtractionError('GRAPHQL_DOC_ID_UNAVAILABLE')), \

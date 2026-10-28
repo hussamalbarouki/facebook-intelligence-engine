@@ -242,7 +242,8 @@ def graphql_response_shape(raw):
 
 
 _COMMENT_ENTRY_LABELS=re.compile(
-    r'(?:^|\b)(?:all\s+)?\d{0,8}\s*comments?\b|(?:view|see|show)\s+(?:all\s+)?comments'
+    r'(?:^|\b)(?:all\s+)?\d{0,8}\s*comments?\b'
+    r'|(?:view|see|show|display|load)\s+(?:all\s+|more\s+)?(?:\d{1,8}\s+)?comments'
     r'|(?:عرض|مشاهدة|إظهار)\s+(?:كل\s+)?(?:\d+\s+)?التعليقات'
     r'|(?:voir|afficher)\s+(?:les\s+)?commentaires'
     r'|(?:visualizza|mostra)\s+(?:tutti\s+)?i\s+commenti'
@@ -271,6 +272,68 @@ def _safe_page_signals(page):
         }""")
     except Exception:
         return {'status':'unavailable'}
+
+
+
+def _visible_comment_entry_buttons(page):
+    """Try only explicitly comment-list-related controls, never Like/Reply/Follow."""
+    # Facebook Comet uses native buttons, links, and custom role=button divs.
+    # Avoid the singular "Comment" composer action.
+    candidates = [
+        page.get_by_role('button', name=_COMMENT_ENTRY_LABELS),
+        page.get_by_role('link', name=_COMMENT_ENTRY_LABELS),
+        page.locator('div[role="button"]').filter(has_text=_COMMENT_ENTRY_LABELS),
+    ]
+    for group in candidates:
+        try:
+            for index in range(min(group.count(), 8)):
+                item=group.nth(index)
+                if not item.is_visible():
+                    continue
+                item.click(timeout=1600)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _scroll_visible_dialog(page):
+    """Scroll the actual comments/reactions dialog if it has a scroll pane."""
+    try:
+        return bool(page.evaluate(r"""() => {
+            const panes=[...document.querySelectorAll('[role="dialog"]')];
+            for (const dialog of panes.slice(0,3)) {
+                const options=[dialog,...dialog.querySelectorAll('div')];
+                for (const node of options.slice(0,200)) {
+                    const css=getComputedStyle(node);
+                    if (node.scrollHeight>node.clientHeight+150 &&
+                       /(auto|scroll)/.test(css.overflowY)) {
+                         node.scrollBy({top:850,behavior:'instant'});
+                         return true;
+                    }
+                }
+            }
+            return false;
+        }"""))
+    except Exception:
+        return False
+
+
+def _browser_page_classification(page):
+    """Safe page-state counters: no content, cookies or user identifiers."""
+    report=_safe_page_signals(page)
+    if not isinstance(report,dict):
+        return {'status':'unknown'}
+    if report.get('login_input') or report.get('page_title_is_login'):
+        return {'status':'login_wall',**report}
+    if report.get('comment_permalink_links',0):
+        return {'status':'comment_links_visible',**report}
+    if report.get('comment_entry_candidates',0):
+        return {'status':'comment_controls_visible',**report}
+    if report.get('comment_articles',0):
+        return {'status':'articles_without_comment_evidence',**report}
+    return {'status':'no_comment_ui_detected',**report}
+
 
 def scrape_with_browser(url, comment_limit, reactor_limit, cookies_file, diagnostic_only=False):
     if os.getenv('FB_BROWSER_ENABLED','1').strip().lower() in ('0','false','no'):
@@ -330,7 +393,7 @@ def scrape_with_browser(url, comment_limit, reactor_limit, cookies_file, diagnos
                 for item in found_comments:
                     comments.setdefault(item['id'],item)
                 for item in found_reactors:
-                    reactors.setdefault(item['profile_url'],item)
+                    reactors.setdefault(item.get('profile_url') or item.get('id'),item)
             except Exception:
                 return
 
@@ -353,14 +416,24 @@ def scrape_with_browser(url, comment_limit, reactor_limit, cookies_file, diagnos
                     page.goto(url,wait_until='domcontentloaded',timeout=22000)
                 except PlaywrightTimeout:
                     logger.info('Facebook browser page navigation timed out; checking visible partial data')
+                # The DOM can finish hydrating well after domcontentloaded.
+                # Without this, the first UI probe runs against the skeleton.
+                page.wait_for_timeout(1400)
                 try:
                     validate_facebook_url(page.url)
                 except ValueError:
                     raise RuntimeError('BROWSER_LEFT_FACEBOOK_DOMAIN') from None
                 path=urlsplit(page.url).path.lower()
+                diagnostics['post_view_kind']=(
+                    'post' if '/posts/' in path else
+                    'story' if path.endswith('story.php') else
+                    'permalink' if '/permalink/' in path else
+                    'video' if '/videos/' in path or '/watch/' in path else
+                    'other')
                 if '/login' in path or '/checkpoint' in path:
                     raise RuntimeError('BROWSER_LOGIN_OR_CHECKPOINT_REQUIRED')
-                diagnostics['rendered']=_safe_page_signals(page)
+                diagnostics['rendered_initial']=_browser_page_classification(page)
+                diagnostics['rendered']=dict(diagnostics['rendered_initial'])
                 if diagnostics['rendered'].get('login_input') or diagnostics['rendered'].get('page_title_is_login'):
                     if diagnostic_only:
                         diagnostics['status']='login_wall_detected'
@@ -371,16 +444,10 @@ def scrape_with_browser(url, comment_limit, reactor_limit, cookies_file, diagnos
                 # control. Legacy code only clicked "View more comments",
                 # which never appears until the comments dialog opens.
                 if comment_limit and time.monotonic()-start < max_duration:
-                    for role in ('button','link'):
-                        try:
-                            candidate=page.get_by_role(role,name=_COMMENT_ENTRY_LABELS)
-                            if candidate.count() and candidate.first.is_visible():
-                                candidate.first.click(timeout=1700)
-                                diagnostics['comment_dialog_opened']=True
-                                page.wait_for_timeout(750)
-                                break
-                        except Exception:
-                            pass
+                    if _visible_comment_entry_buttons(page):
+                        diagnostics['comment_dialog_opened']=True
+                        page.wait_for_timeout(1100)
+                diagnostics['rendered_after_open']=_browser_page_classification(page)
                 for round_no in range(8):
                     if time.monotonic()-start>max_duration:
                         break
@@ -413,10 +480,11 @@ def scrape_with_browser(url, comment_limit, reactor_limit, cookies_file, diagnos
                         except Exception:
                             pass
                     if not expanded:
-                        try:
-                            page.mouse.wheel(0,950)
-                        except Exception:
-                            pass
+                        if not _scroll_visible_dialog(page):
+                            try:
+                                page.mouse.wheel(0,950)
+                            except Exception:
+                                pass
                     page.wait_for_timeout(900)
                 # Reaction names are loaded by Facebook only after opening its
                 # read-only people-who-reacted dialog. Never click a Like or
@@ -452,10 +520,14 @@ def scrape_with_browser(url, comment_limit, reactor_limit, cookies_file, diagnos
                                                                       'type':'unknown'})
                     except Exception as exc:
                         logger.info('Reaction dialog read unavailable: %s',type(exc).__name__)
+                diagnostics['rendered_final']=_browser_page_classification(page)
                 context.close()
             finally:
                 browser.close()
         diagnostics['rendered']=diagnostics.get('rendered') or {}
+        # Final page-state classification distinguishes invisible comments
+        # from a failing parser without exposing the page itself.
+        diagnostics['rendered_after_open']=diagnostics.get('rendered_after_open') or {}
         diagnostics['graphql_parsed']=parsed_responses
         diagnostics['comments_extracted']=len(comments)
         diagnostics['reactors_extracted']=len(reactors)
@@ -466,6 +538,16 @@ def scrape_with_browser(url, comment_limit, reactor_limit, cookies_file, diagnos
                     len(comments),len(reactors),parsed_responses,
                     diagnostics['comment_shape_nodes'],diagnostics['reactor_containers'],
                     diagnostics['expand_clicks'],diagnostics['status'])
+        initial=diagnostics.get('rendered_initial') or {}
+        final=diagnostics.get('rendered_final') or {}
+        logger.info('Browser UI observation: kind=%s initial=%s comment_controls=%d opened=%s final=%s visible_comment_links=%d reaction_dialog=%s',
+                    diagnostics.get('post_view_kind','unknown'),
+                    initial.get('status','unknown'),
+                    initial.get('comment_entry_candidates',0),
+                    diagnostics['comment_dialog_opened'],
+                    final.get('status','unknown'),
+                    final.get('comment_permalink_links',0),
+                    diagnostics['reaction_dialog_opened'])
         if diagnostic_only:
             return diagnostics
         if (not comments and not reactors):
