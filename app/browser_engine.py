@@ -242,8 +242,9 @@ def graphql_response_shape(raw):
 
 
 _COMMENT_ENTRY_LABELS=re.compile(
-    r'(?:^|\b)(?:all\s+)?\d{0,8}\s*comments?\b'
-    r'|(?:view|see|show|display|load)\s+(?:all\s+|more\s+)?(?:\d{1,8}\s+)?comments'
+    r'(?:^|\b)(?:all\s+)?\d{1,8}\s+comments?\b'
+    r'|(?:^|\b)all\s+comments\b'
+    r'|(?:view|see|show|display|load)\s+(?:all\s+|more\s+)?(?:\d{1,8}\s+)?comments\b'
     r'|(?:عرض|مشاهدة|إظهار)\s+(?:كل\s+)?(?:\d+\s+)?التعليقات'
     r'|(?:voir|afficher)\s+(?:les\s+)?commentaires'
     r'|(?:visualizza|mostra)\s+(?:tutti\s+)?i\s+commenti'
@@ -289,6 +290,13 @@ def _visible_comment_entry_buttons(page):
             for index in range(min(group.count(), 8)):
                 item=group.nth(index)
                 if not item.is_visible():
+                    continue
+                # A parent may match "12 comments" while also containing
+                # the composer or Like button. Never click broad containers.
+                label=(item.inner_text(timeout=700) or '').strip()
+                if (len(label)>110 or not _COMMENT_ENTRY_LABELS.search(label)
+                        or re.search(r'(?:^|\s)(?:send|reply|like|follow|submit)(?:\s|$)',label,re.I)
+                        or re.search(r'إرسال|تعليقك|أعجبني|متابعة',label)):
                     continue
                 item.click(timeout=1600)
                 return True
