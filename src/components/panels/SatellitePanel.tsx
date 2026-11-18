@@ -1,0 +1,126 @@
+'use client';
+
+import { useConflictFeed } from '@/lib/hooks';
+import { useConflict } from '@/lib/conflicts/context';
+import type { RegionBox } from '@/lib/conflicts';
+import { arabicLabel } from '@/lib/arabic';
+
+interface FireEvent {
+  lat: number;
+  lon: number;
+  brightness: number;
+  frp: number;
+  confidence: string;
+  intensity: 'low' | 'medium' | 'high' | 'extreme';
+  datetime: string;
+  daynight: string;
+  possibleExplosion: boolean;
+}
+
+interface FIRMSData {
+  total: number;
+  highIntensity: number;
+  possibleExplosions: number;
+  events: FireEvent[];
+  source: string;
+  error?: string;
+}
+
+const INTENSITY_COLORS: Record<string, string> = {
+  low: 'var(--text-secondary)',
+  medium: 'var(--amber)',
+  high: 'var(--orange)',
+  extreme: 'var(--red)',
+};
+
+// Rough reverse geocoding — boxes come from the active conflict config.
+function getRegion(lat: number, lon: number, boxes: RegionBox[], fallback: string): string {
+  for (const b of boxes) {
+    if (lat >= b.latMin && lat <= b.latMax && lon >= b.lonMin && lon <= b.lonMax) return b.name;
+  }
+  return fallback;
+}
+
+export default function SatellitePanel() {
+  const { config } = useConflict();
+  const { regionBoxes, defaultRegion } = config.client;
+  const { data, loading } = useConflictFeed<FIRMSData>('/api/fires', 600000); // 10 min refresh
+
+  return (
+    <div className="panel h-full flex flex-col">
+      <div className="panel-header">
+        <span className="status-dot" style={{ background: 'var(--orange)' }} />
+        الرصد الحراري بالأقمار الصناعية
+        <span className="ml-auto text-[9px] text-(--text-secondary) font-normal normal-case tracking-normal">
+          ناسا FIRMS
+        </span>
+      </div>
+
+      {/* Summary stats */}
+      <div className="flex items-center gap-3 px-3 py-1.5 border-b border-(--border-color) bg-(--bg-panel-header)">
+        <div className="text-center">
+          <div className="text-sm font-bold text-(--text-primary)">{data?.total || 0}</div>
+          <div className="text-[8px] text-(--text-secondary)">بؤر حرارية</div>
+        </div>
+        <div className="text-center">
+          <div className="text-sm font-bold" style={{ color: 'var(--orange)' }}>{data?.highIntensity || 0}</div>
+          <div className="text-[8px] text-(--text-secondary)">شدة عالية</div>
+        </div>
+        <div className="text-center">
+          <div className="text-sm font-bold text-(--red)">{data?.possibleExplosions || 0}</div>
+          <div className="text-[8px] text-(--text-secondary)">معلّمة</div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
+        {loading ? (
+          <div className="space-y-2 p-3">
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="loading-shimmer h-10 rounded-sm" />
+            ))}
+          </div>
+        ) : data?.events.length === 0 ? (
+          <div className="p-4 text-center text-(--text-secondary) text-xs">
+            لم تُرصد شذوذات حرارية في المنطقة
+          </div>
+        ) : (
+          data?.events.slice(0, 30).map((event, i) => {
+            const region = getRegion(event.lat, event.lon, regionBoxes, defaultRegion);
+            return (
+              <div
+                key={i}
+                className={`data-row flex items-center gap-2 ${event.possibleExplosion ? 'bg-red-900/10' : ''}`}
+              >
+                <div
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ background: INTENSITY_COLORS[event.intensity] }}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-medium">{region}</span>
+                    {event.possibleExplosion && (
+                      <span className="text-[8px] font-bold px-1 py-0.5 rounded-sm bg-red-900/30 text-(--red)">
+                        معلّمة
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[9px] text-(--text-secondary)">
+                    FRP: {event.frp} MW | {event.brightness}K |{' '}
+                    {event.lat.toFixed(2)}, {event.lon.toFixed(2)} |{' '}
+                    {new Date(event.datetime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                </div>
+                <span
+                  className="text-[8px] font-bold shrink-0"
+                  style={{ color: INTENSITY_COLORS[event.intensity] }}
+                >
+                  {arabicLabel(event.intensity)}
+                </span>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}

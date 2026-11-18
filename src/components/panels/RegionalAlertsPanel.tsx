@@ -1,0 +1,155 @@
+'use client';
+
+import { useState } from 'react';
+import { useConflictFeed, timeAgo, useTick } from '@/lib/hooks';
+import { useConflict } from '@/lib/conflicts/context';
+import type { RegionalData } from '@/lib/types/api';
+import { withAlpha } from '@/lib/color';
+import { arabicLabel } from '@/lib/arabic';
+
+const LEVEL_CONFIG: Record<string, { color: string; label: string }> = {
+  CLEAR: { color: 'var(--green)', label: 'آمن' },
+  MONITORING: { color: 'var(--blue)', label: 'مراقبة' },
+  ALERT: { color: 'var(--amber)', label: 'تنبيه' },
+  CRITICAL: { color: 'var(--red)', label: 'حرج' },
+};
+
+const SEVERITY_COLORS: Record<string, string> = {
+  critical: 'var(--red)',
+  high: 'var(--orange)',
+  medium: 'var(--amber)',
+  low: 'var(--blue)',
+};
+
+export default function RegionalAlertsPanel() {
+  const { config } = useConflict();
+  const COUNTRY_COLORS = config.client.countryColors;
+  const { data, loading } = useConflictFeed<RegionalData>('/api/regional-alerts', 60000);
+  useTick(15000);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  const toggleCollapse = (country: string) => {
+    setCollapsed(prev => {
+      const next = new Set(prev);
+      if (next.has(country)) {
+        next.delete(country);
+      } else {
+        next.add(country);
+      }
+      return next;
+    });
+  };
+
+  // Sort by most recent event first
+  const sorted = data?.alerts ? [...data.alerts].sort((a, b) => {
+    const aTime = a.events[0]?.hoursAgo ?? 999;
+    const bTime = b.events[0]?.hoursAgo ?? 999;
+    return aTime - bTime;
+  }) : [];
+
+  return (
+    <div className="panel h-full flex flex-col">
+      <div className="panel-header">
+        <span
+          className="status-dot"
+          style={{
+            background: sorted.some(a => a.level === 'CRITICAL') ? 'var(--red)' :
+                        sorted.some(a => a.level === 'ALERT') ? 'var(--amber)' :
+                        'var(--blue)',
+            animation: sorted.some(a => a.level === 'CRITICAL') ? 'pulse-dot 0.5s ease-in-out infinite' : undefined,
+          }}
+        />
+        مراقبة التهديدات الإقليمية
+        <span className="ml-auto text-[9px] text-(--text-secondary) font-normal normal-case tracking-normal">
+          {sorted.filter(a => a.level !== 'CLEAR').length} نشط
+        </span>
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
+        {loading ? (
+          <div className="space-y-2 p-3">
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="loading-shimmer h-12 rounded-sm" />
+            ))}
+          </div>
+        ) : (
+          sorted.map((country, i) => {
+            const levelConfig = LEVEL_CONFIG[country.level] || LEVEL_CONFIG.CLEAR;
+            const countryColor = COUNTRY_COLORS[country.name] || '#888';
+            const hasEvents = country.events.length > 0;
+            const isCollapsed = collapsed.has(country.name);
+
+            return (
+              <div
+                key={i}
+                className="border-b border-(--border-color)"
+              >
+                {/* Country header - clickable to collapse */}
+                <div
+                  className="px-3 py-1 flex items-center justify-between cursor-pointer select-none hover:bg-[rgba(var(--tint-rgb),0.02)]"
+                  onClick={() => toggleCollapse(country.name)}
+                  style={{ borderLeft: `3px solid ${countryColor}` }}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[9px] text-(--text-secondary)">
+                      {isCollapsed ? '▸' : '▾'}
+                    </span>
+                    <span className="text-xs">{country.flag}</span>
+                    <span className="text-[11px] font-bold" style={{ color: countryColor }}>
+                      {arabicLabel(country.name)}
+                    </span>
+                    {hasEvents && (
+                      <span className="text-[9px] text-(--text-secondary)">
+                        {country.events[0].hoursAgo < 1
+                          ? `منذ ${Math.max(1, Math.round(country.events[0].hoursAgo * 60))} د`
+                          : `منذ ${Math.round(country.events[0].hoursAgo)} س`
+                        }
+                      </span>
+                    )}
+                  </div>
+                  <span
+                    className="text-[9px] font-bold px-1.5 py-0.5 rounded-sm"
+                    style={{
+                      color: levelConfig.color,
+                      border: `1px solid ${withAlpha(levelConfig.color, '30')}`,
+                      backgroundColor: withAlpha(levelConfig.color, '10'),
+                    }}
+                  >
+                    {levelConfig.label}
+                  </span>
+                </div>
+
+                {/* Events - collapsible */}
+                {!isCollapsed && country.events.slice(0, 3).map((event, j) => (
+                  <a
+                    key={j}
+                    href={event.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block px-3 py-0.5 hover:bg-[rgba(var(--accent-rgb),0.05)] cursor-pointer"
+                    style={{ paddingLeft: '18px' }}
+                  >
+                    <div className="flex items-start gap-1.5">
+                      <span
+                        className="w-1.5 h-1.5 rounded-full mt-1 shrink-0"
+                        style={{ background: SEVERITY_COLORS[event.severity] }}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[10px] leading-tight text-(--text-primary) line-clamp-1">
+                          {event.title}
+                        </p>
+                        <span className="text-[9px] text-(--text-secondary)">
+                          {event.source} • {timeAgo(event.time)}
+                        </span>
+                      </div>
+                    </div>
+                  </a>
+                ))}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}

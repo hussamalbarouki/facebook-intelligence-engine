@@ -1,0 +1,82 @@
+'use client';
+
+import { useConflictFeed, timeAgo, useTick } from '@/lib/hooks';
+import type { ConflictEvent } from '@/types';
+import { withAlpha } from '@/lib/color';
+import { arabicLabel } from '@/lib/arabic';
+
+const TYPE_COLORS: Record<string, string> = {
+  STRIKE: 'var(--red)',
+  DEFENSE: 'var(--green)',
+  MILITARY: 'var(--amber)',
+  DIPLOMATIC: 'var(--blue)',
+  NUCLEAR: 'var(--purple)',
+  REPORT: 'var(--text-secondary)',
+};
+
+export default function ConflictFeed() {
+  const { data: rawEvents, loading } = useConflictFeed<ConflictEvent[]>('/api/conflicts', 180000);
+  useTick(15000);
+
+  // Sort most recent first
+  const events = rawEvents ? [...rawEvents].sort((a, b) =>
+    new Date(b.date).getTime() - new Date(a.date).getTime()
+  ) : null;
+
+  return (
+    <div className="panel h-full flex flex-col">
+      <div className="panel-header">
+        <span className="status-dot" style={{ background: 'var(--red)' }} />
+        مراقبة النزاعات
+        <span className="ml-auto text-[9px] text-(--text-secondary) font-normal normal-case tracking-normal">
+          {events?.length || 0} حدث
+        </span>
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        {loading ? (
+          <div className="space-y-2 p-3">
+            {[...Array(6)].map((_, i) => (
+              <div key={i} className="loading-shimmer h-14 rounded-sm" />
+            ))}
+          </div>
+        ) : events?.length === 0 ? (
+          <div className="p-4 text-center text-(--text-secondary) text-xs">
+            لا توجد أحداث نزاع حديثة
+          </div>
+        ) : (
+          events?.map((event, i) => {
+            const color = TYPE_COLORS[event.type] || TYPE_COLORS.REPORT;
+            return (
+              <div key={i} className="data-row">
+                <div className="flex items-center gap-2 mb-1">
+                  <span
+                    className="text-[9px] font-bold px-1.5 py-0.5 rounded-sm"
+                    style={{
+                      color,
+                      backgroundColor: withAlpha(color, '15'),
+                      border: `1px solid ${withAlpha(color, '30')}`,
+                    }}
+                  >
+                    {arabicLabel(event.type)}
+                  </span>
+                  <span className="text-[9px] text-(--text-secondary)">
+                    {event.location}
+                  </span>
+                  <span className="text-[9px] text-(--text-secondary) ml-auto">
+                    {timeAgo(event.date)}
+                  </span>
+                </div>
+                <p className="text-[11px] leading-tight text-(--text-primary)">
+                  {event.description}
+                </p>
+                <span className="text-[8px] text-(--text-secondary)">
+                  المصدر: {event.source}
+                </span>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}

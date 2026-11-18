@@ -1,0 +1,79 @@
+import { useState, useEffect, useCallback } from 'react';
+import { useConflict } from './conflicts/context';
+
+export function useDataFeed<T>(url: string, interval: number = 60000, initialData: T | null = null) {
+  const [data, setData] = useState<T | null>(initialData);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  const fetchData = useCallback(async () => {
+    try {
+      // Cache-bust to ensure fresh data on each poll
+      const bustUrl = `${url}${url.includes('?') ? '&' : '?'}_t=${Date.now()}`;
+      const res = await fetch(bustUrl, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      // Keep previous data if new response is empty (likely rate limited)
+      const isEmpty = Array.isArray(json) ? json.length === 0 :
+                      json && typeof json === 'object' && 'posts' in json ? json.posts?.length === 0 : false;
+      if (!isEmpty || !data) {
+        setData(json);
+      }
+      setLastUpdated(new Date());
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch');
+    } finally {
+      setLoading(false);
+    }
+  }, [url]);
+
+  useEffect(() => {
+    // Fetch on mount, then poll: fetchData sets state after an await, by design.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchData();
+    const id = setInterval(fetchData, interval);
+    return () => clearInterval(id);
+  }, [fetchData, interval]);
+
+  return { data, loading, error, lastUpdated, refetch: fetchData };
+}
+
+/**
+ * Like useDataFeed, but automatically appends the active conflict as a
+ * `?conflict=<key>` query param. When the user toggles conflicts the URL
+ * changes, so the feed re-fetches for the newly selected theater.
+ */
+export function useConflictFeed<T>(path: string, interval: number = 60000, initialData: T | null = null) {
+  const { key } = useConflict();
+  const url = `${path}${path.includes('?') ? '&' : '?'}conflict=${key}`;
+  return useDataFeed<T>(url, interval, initialData);
+}
+
+/** Forces a re-render every `ms` milliseconds so relative timestamps stay fresh. */
+export function useTick(ms: number = 15000) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), ms);
+    return () => clearInterval(id);
+  }, [ms]);
+}
+
+export function timeAgo(date: string | Date): string {
+  if (!date) return '';
+  const now = new Date();
+  const then = new Date(date);
+
+  // Invalid date
+  if (isNaN(then.getTime())) return '';
+
+  const seconds = Math.floor((now.getTime() - then.getTime()) / 1000);
+  const abs = Math.abs(seconds);
+
+  if (abs < 60) return 'الآن';
+  if (abs < 3600) return `منذ ${Math.floor(abs / 60)} د`;
+  if (abs < 86400) return `منذ ${Math.floor(abs / 3600)} س`;
+  return `منذ ${Math.floor(abs / 86400)} ي`;
+}
+

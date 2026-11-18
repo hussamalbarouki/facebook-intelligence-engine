@@ -1,0 +1,10 @@
+services:
+  eagle-eye-information:
+    build: .
+    image: eagle-eye-information:latest
+    container_name: eagle-eye-information
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped

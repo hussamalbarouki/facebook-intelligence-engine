@@ -1,0 +1,12 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+
+interface Item { id:string; title:string; body:string; priority:string; sourceName?:string; operationType?:string; operationArea?:string; operationSeverity?:string }
+const priority: Record<string,string> = { normal:'اعتيادي', important:'مهم', urgent:'عاجل', critical:'حرج' };
+
+export default function ManagedContentPanel({ category, title }: { category:string; title:string }) {
+  const [items,setItems]=useState<Item[]>([]); const [loading,setLoading]=useState(true);
+  useEffect(()=>{let active=true;const load=()=>fetch(`/api/content?category=${category}`,{cache:'no-store'}).then(r=>r.json()).then(d=>{if(active)setItems(d.items||[])}).catch(()=>{}).finally(()=>active&&setLoading(false));load();const id=setInterval(load,30_000);return()=>{active=false;clearInterval(id)};},[category]);
+  return <section dir="rtl" className="panel flex h-full flex-col"><header className="panel-header flex items-center justify-between"><span>{title}</span><span className="text-[8px] text-(--text-secondary)">{items.length} عنصر</span></header><div className="min-h-0 flex-1 overflow-y-auto p-2">{loading?<p className="p-3 text-center text-[10px] text-(--text-secondary)">جارٍ التحميل...</p>:items.length===0?<div className="grid h-full place-items-center text-center"><div><p className="text-xl text-(--text-secondary)">—</p><p className="mt-2 text-[9px] text-(--text-secondary)">لا يوجد محتوى منشور حالياً</p></div></div>:<div className="space-y-2">{items.map(item=><article key={item.id} className={`rounded border p-2 ${item.priority==='critical'?'border-red-800/70 bg-red-950/20':'border-(--border-color) bg-(--bg-secondary)'}`}><div className="mb-1 flex items-center justify-between gap-2"><h3 className="text-[10px] font-bold leading-4 text-(--text-primary)">{item.title}</h3><span className={`shrink-0 text-[7px] ${item.priority==='critical'?'text-(--red)':item.priority==='urgent'?'text-(--amber)':'text-(--text-secondary)'}`}>{priority[item.priority]}</span></div><p className="line-clamp-3 whitespace-pre-line text-[9px] leading-4 text-(--text-secondary)">{item.body}</p>{(item.operationType||item.operationArea||item.sourceName)&&<div className="mt-2 flex flex-wrap gap-1 text-[7px] text-(--accent)">{item.operationType&&<span>{item.operationType}</span>}{item.operationArea&&<span>• {item.operationArea}</span>}{item.operationSeverity&&<span>• {item.operationSeverity}</span>}{item.sourceName&&<span>المصدر: {item.sourceName}</span>}</div>}</article>)}</div>}</div></section>;
+}
